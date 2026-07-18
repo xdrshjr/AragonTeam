@@ -1,10 +1,12 @@
-"""BUG 路由（§4.4 + Phase-2）。CRUD + assign + move + **agent-advance**。
+"""BUG 路由（§4.4 + Phase-2 + Phase-3）。CRUD + assign + move + **agent-advance**。
 
 与需求 move 共享同一套契约：迁移只认 workflow 邻接表，move 支持 position 精确插入。
-assign / move / agent-advance 仅 @jwt_required()（【R-08】）。# TODO(rbac-row-level)
+Phase-3：patch/move 加行级 RBAC（can_manage_ticket）+ 乐观并发守卫；assign 限 pm/admin；
+list 加过滤/检索（含 severity）；写路径接入通知扇出（复用 requirements 蓝图的共享 helper）。
 """
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required
+from sqlalchemy import or_
 
 from extensions import db
 from models.bug import Bug, SEVERITIES, ASSIGNEE_TYPES
@@ -13,12 +15,15 @@ from models.user import User
 from models.agent import Agent
 from models.activity import Activity
 from models.comment import Comment
-from services import workflow
-from services.auth_helpers import require_role, current_user
+from models.notification import Notification
+from services import workflow, notifications
+from services.auth_helpers import (
+    require_role, current_user, can_manage_ticket, forbidden,
+)
 from services.pagination import paginate, with_total_count
 from routes.requirements import (
     _next_position, _validate_assignee, _validate_project, _actor,
-    _coerce_index, _reindex_column, do_agent_advance,
+    _coerce_index, _reindex_column, do_agent_advance, check_concurrency,
 )
 
 bp = Blueprint("bugs", __name__, url_prefix="/api/bugs")
@@ -30,13 +35,27 @@ def list_bugs():
     q = Bug.query
     project_id = request.args.get("project_id", type=int)
     status = request.args.get("status")
+    assignee_type = request.args.get("assignee_type")
     assignee_id = request.args.get("assignee_id", type=int)
+    # 【Phase-3 §2.6】过滤 / 检索（全部可选、AND 组合、向后兼容；BUG 侧含 severity）。
+    keyword = request.args.get("q")
+    severity = request.args.get("severity")
+    reporter_id = request.args.get("reporter_id", type=int)
     if project_id is not None:
         q = q.filter_by(project_id=project_id)
     if status:
         q = q.filter_by(status=status)
+    if assignee_type:
+        q = q.filter_by(assignee_type=assignee_type)
     if assignee_id is not None:
         q = q.filter_by(assignee_id=assignee_id)
+    if severity:
+        q = q.filter_by(severity=severity)
+    if reporter_id is not None:
+        q = q.filter_by(reporter_id=reporter_id)
+    if keyword:
+        like = f"%{keyword}%"
+        q = q.filter(or_(Bug.title.ilike(like), Bug.description.ilike(like)))
     # 【Phase-2 §2.5-3】分页（非破坏）：裸数组 + X-Total-Count。
     q = q.order_by(Bug.position.asc(), Bug.id.asc())
     rows, total = paginate(q)
@@ -97,7 +116,14 @@ def patch_bug(bug_id):
     bug = db.session.get(Bug, bug_id)
     if bug is None:
         return jsonify({"error": "bug not found"}), 404
+    # 【Phase-3 §2.4】行级 RBAC。
+    if not can_manage_ticket(current_user(), bug):
+        return forbidden({"reason": "cannot edit this bug"})
     data = request.get_json(silent=True) or {}
+    # 【Phase-3 §2.5】乐观并发守卫（缺省不校验）。
+    conflict = check_concurrency(bug, data)
+    if conflict:
+        return conflict
     changed = False
     if "title" in data:
         title = (data.get("title") or "").strip()
@@ -123,7 +149,7 @@ def patch_bug(bug_id):
 
 
 @bp.patch("/<int:bug_id>/assign")
-@jwt_required()  # 【R-08】仅需登录。# TODO(rbac-row-level)
+@require_role("admin", "pm")  # 【Phase-3 §2.4】指派 / 改派仅 pm/admin。
 def assign_bug(bug_id):
     bug = db.session.get(Bug, bug_id)
     if bug is None:
@@ -148,21 +174,31 @@ def assign_bug(bug_id):
     Activity.log("bug", bug.id, "assigned", actor=_actor(),
                  from_status=frm, to_status=bug.status,
                  message=f"指派给{'成员' if assignee_type == 'user' else 'Agent'}「{name}」")
+    # 【Phase-3 §2.3】扇出：通知新的人类 assignee（Agent 不发）。
+    notifications.notify_assignment(bug, "bug", actor=_actor())
     db.session.commit()
     return jsonify(bug.to_dict()), 200
 
 
 @bp.patch("/<int:bug_id>/move")
-@jwt_required()  # 【R-08】仅需登录。# TODO(rbac-row-level)
+@jwt_required()
 def move_bug(bug_id):
     bug = db.session.get(Bug, bug_id)
     if bug is None:
         return jsonify({"error": "bug not found"}), 404
+    # 【Phase-3 §2.4】行级 RBAC。
+    if not can_manage_ticket(current_user(), bug):
+        return forbidden({"reason": "cannot move this bug"})
     data = request.get_json(silent=True) or {}
     to = data.get("status")
     if not to or not workflow.is_valid_status("bug", to):
         return jsonify({"error": "invalid target status",
                         "detail": {"allowed": workflow.column_keys("bug")}}), 400
+
+    # 【Phase-3 §2.5】乐观并发守卫——同列早退分支也须先过守卫〔放行条件4〕。
+    conflict = check_concurrency(bug, data)
+    if conflict:
+        return conflict
 
     frm = bug.status
     index = _coerce_index(data.get("position"))
@@ -189,12 +225,15 @@ def move_bug(bug_id):
         bug.position = _next_position(Bug, to)
     Activity.log("bug", bug.id, "moved", actor=_actor(),
                  from_status=frm, to_status=to, message=f"状态 {frm} → {to}")
+    # 【Phase-3 §2.3】扇出：人类推进 → status_changed 通知。
+    notifications.notify_advance(bug, "bug", actor=_actor(),
+                                 from_status=frm, to_status=to)
     db.session.commit()
     return jsonify(bug.to_dict()), 200
 
 
 @bp.post("/<int:bug_id>/agent-advance")
-@jwt_required()  # 【R-08】仅需登录。# TODO(rbac-row-level)
+@jwt_required()  # 行级 RBAC 在 do_agent_advance 内联裁决〔R3-01〕。
 def agent_advance_bug(bug_id):
     return do_agent_advance("bug", Bug, bug_id)
 
@@ -207,6 +246,8 @@ def delete_bug(bug_id):
         return jsonify({"error": "bug not found"}), 404
     # §5：删单一并删其评论。
     Comment.query.filter_by(entity_type="bug", entity_id=bug_id).delete()
+    # 【Phase-3 §5】删单一并删其通知。
+    Notification.query.filter_by(entity_type="bug", entity_id=bug_id).delete()
     # §2.8-3：删除进时间线。
     Activity.log("bug", bug_id, "deleted", actor=_actor(),
                  from_status=bug.status, message=f"删除 BUG「{bug.title}」")

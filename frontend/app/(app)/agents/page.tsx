@@ -1,11 +1,24 @@
 "use client";
 
-import useSWR from "swr";
+import { useState } from "react";
+import useSWR, { useSWRConfig } from "swr";
 import Link from "next/link";
-import { swrFetcher } from "@/lib/api";
-import type { Agent, Requirement, Bug, Stats } from "@/lib/types";
-import { AGENT_KIND_LABELS, AGENT_STATUS_LABELS, actionLabel } from "@/lib/constants";
+import { api, swrFetcher, ApiError } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
+import { useToast } from "@/lib/toast";
+import type {
+  Agent,
+  Requirement,
+  Bug,
+  Stats,
+  AutorunResult,
+  TickResult,
+  ClaimResult,
+  AutorunAllResult,
+} from "@/lib/types";
+import { AGENT_KIND_LABELS, AGENT_STATUS_LABELS, actionLabel, autopilotSummary } from "@/lib/constants";
 import Header from "@/components/layout/Header";
+import Button from "@/components/ui/Button";
 import Avatar from "@/components/ui/Avatar";
 
 const STATUS_DOT: Record<string, string> = {
@@ -15,10 +28,29 @@ const STATUS_DOT: Record<string, string> = {
 };
 
 export default function AgentsPage() {
+  const { user } = useAuth();
+  const toast = useToast();
+  const { mutate } = useSWRConfig();
   const { data: agents } = useSWR<Agent[]>("/agents", swrFetcher);
   const { data: reqs } = useSWR<Requirement[]>("/requirements", swrFetcher);
   const { data: bugs } = useSWR<Bug[]>("/bugs", swrFetcher);
   const { data: stats } = useSWR<Stats>("/stats", swrFetcher);
+
+  // 只有 pm/admin 能触发自主编排（后端仍是权威）。
+  const canOrchestrate = user?.role === "admin" || user?.role === "pm";
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [teamBusy, setTeamBusy] = useState(false);
+
+  // 自主运行后刷新看板 / 列表 / Agent / 仪表盘 / 未读数。
+  function revalidateAll() {
+    for (const k of [
+      "/agents", "/requirements", "/bugs", "/stats",
+      "/board/requirements", "/board/bugs",
+      "/notifications/unread-count",
+    ]) {
+      mutate(k);
+    }
+  }
 
   function workload(agentId: number) {
     const r = (reqs ?? []).filter(
@@ -36,14 +68,90 @@ export default function AgentsPage() {
       .slice(0, 3);
   }
 
+  async function onClaim(a: Agent) {
+    setBusyId(a.id);
+    try {
+      const res = await api.post<ClaimResult>(`/agents/${a.id}/claim-next`, {});
+      if (res.claimed) {
+        toast.success(autopilotSummary(a.name, { claimed: 1 }));
+      } else {
+        toast.info(`${a.name}：暂无可认领工单`);
+      }
+      revalidateAll();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "认领失败");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function onAutorun(a: Agent) {
+    setBusyId(a.id);
+    try {
+      const res = await api.post<AutorunResult>(`/agents/${a.id}/autorun?run=all`, {});
+      toast.success(autopilotSummary(a.name, { advanced: res.advanced.length }));
+      revalidateAll();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) toast.info(`${a.name} 正在忙碌`);
+      else toast.error(err instanceof ApiError ? err.message : "运行失败");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function onTick(a: Agent) {
+    setBusyId(a.id);
+    try {
+      const res = await api.post<TickResult>(`/agents/${a.id}/tick?run=all`, {
+        claim: true,
+        claim_count: 1,
+      });
+      toast.success(
+        autopilotSummary(a.name, { claimed: res.claimed.length, advanced: res.advanced.length })
+      );
+      revalidateAll();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) toast.info(`${a.name} 正在忙碌`);
+      else toast.error(err instanceof ApiError ? err.message : "运行失败");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function onRunTeam() {
+    setTeamBusy(true);
+    try {
+      const res = await api.post<AutorunAllResult>(`/agents/autorun-all?run=all`, { claim: true });
+      const claimed = res.runs.reduce((s, r) => s + r.claimed.length, 0);
+      const advanced = res.runs.reduce((s, r) => s + r.advanced.length, 0);
+      toast.success(autopilotSummary("AI 团队", { claimed, advanced }));
+      revalidateAll();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "运行失败");
+    } finally {
+      setTeamBusy(false);
+    }
+  }
+
   return (
     <>
-      <Header title="Agent" subtitle="AI 执行者 · 可被指派需求与 BUG 的一等公民" />
+      <Header
+        title="Agent"
+        subtitle="AI 执行者 · 可被指派需求与 BUG 的一等公民"
+        action={
+          canOrchestrate ? (
+            <Button size="sm" onClick={onRunTeam} disabled={teamBusy}>
+              {teamBusy ? "运行中…" : "▶ 运行 AI 团队一轮"}
+            </Button>
+          ) : undefined
+        }
+      />
       <main className="flex-1 overflow-y-auto p-6">
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
           {agents?.map((a) => {
             const load = workload(a.id);
             const recent = recentFor(a.id);
+            const running = busyId === a.id || a.status === "busy";
             return (
               <div
                 key={a.id}
@@ -81,6 +189,21 @@ export default function AgentsPage() {
                     进行中 <span className="font-semibold text-ink">{load.total}</span>
                   </span>
                 </div>
+
+                {/* Phase-3：自主编排操作区（仅 pm/admin） */}
+                {canOrchestrate && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Button size="sm" variant="subtle" onClick={() => onTick(a)} disabled={running}>
+                      {running ? "处理中…" : "⚡ 自动一轮"}
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => onClaim(a)} disabled={running}>
+                      认领下一个
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => onAutorun(a)} disabled={running}>
+                      运行队列
+                    </Button>
+                  </div>
+                )}
 
                 {/* 最近该 Agent 的活动 */}
                 {recent.length > 0 && (

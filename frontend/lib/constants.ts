@@ -120,3 +120,43 @@ export const AUTHOR_STYLES: Record<string, AuthorStyle> = {
 export function authorStyle(type: string): AuthorStyle {
   return AUTHOR_STYLES[type] || AUTHOR_STYLES.system;
 }
+
+// —— Phase-3：通知类型中文名 + 图标（emoji，零依赖）——
+export const NOTIFICATION_LABELS: Record<string, string> = {
+  assigned: "指派",
+  commented: "评论",
+  mentioned: "提及",
+  status_changed: "状态流转",
+  agent_advanced: "Agent 推进",
+  converted: "转 BUG",
+};
+
+export const NOTIFICATION_ICONS: Record<string, string> = {
+  assigned: "📌",
+  commented: "💬",
+  mentioned: "@",
+  status_changed: "↔",
+  agent_advanced: "🤖",
+  converted: "🐞",
+};
+
+export function notificationLabel(type: string): string {
+  return NOTIFICATION_LABELS[type] || type;
+}
+
+export function notificationIcon(type: string): string {
+  return NOTIFICATION_ICONS[type] || "🔔";
+}
+
+// —— Phase-3：Agent 自主运行结果 → 一句话概要（toast 用）——
+export function autopilotSummary(name: string, opts: {
+  claimed?: number;
+  advanced?: number;
+  skipped?: number;
+}): string {
+  const parts: string[] = [];
+  if (opts.claimed) parts.push(`认领 ${opts.claimed} 张`);
+  if (opts.advanced) parts.push(`推进 ${opts.advanced} 步`);
+  if (!parts.length) return `${name}：暂无可处理的工单`;
+  return `${name}：${parts.join(" · ")}`;
+}

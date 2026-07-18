@@ -45,7 +45,7 @@ export default function CommentComposer({ onSubmit }: Props) {
           }
         }}
         rows={2}
-        placeholder="写下评论，与团队和 Agent 协作…（⌘/Ctrl + Enter 发送）"
+        placeholder="写下评论，与团队和 Agent 协作…（@用户名 可提醒对方 · ⌘/Ctrl + Enter 发送）"
         className="resize-y rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink placeholder:text-ink-muted/70 focus:border-clay focus:outline-none focus:ring-2 focus:ring-clay/20"
       />
       <div className="flex justify-end">

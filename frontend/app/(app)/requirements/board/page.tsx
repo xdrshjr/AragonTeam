@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api, ApiError } from "@/lib/api";
@@ -19,6 +19,20 @@ export default function RequirementsBoardPage() {
   const { board, isLoading, move, mutate } = useBoard("requirements");
   const [converting, setConverting] = useState(false);
   const [openId, setOpenId] = useState<number | null>(null);
+
+  // 【Phase-3 §2.3.3】通知直达：读 ?ticket=<id> 自动打开对应工单抽屉。
+  // 用 window.location + 事件而非 useSearchParams，规避静态预渲染的 Suspense 约束：
+  // 跨页导航走 mount 读取；已在本看板时同路由 push 不重挂载，靠事件即时打开。
+  useEffect(() => {
+    const t = new URLSearchParams(window.location.search).get("ticket");
+    if (t && !Number.isNaN(Number(t))) setOpenId(Number(t));
+    function onOpen(e: Event) {
+      const d = (e as CustomEvent<{ entity: string; id: number }>).detail;
+      if (d?.entity === "requirements" && d.id != null) setOpenId(d.id);
+    }
+    window.addEventListener("aragon:open-ticket", onOpen);
+    return () => window.removeEventListener("aragon:open-ticket", onOpen);
+  }, []);
 
   async function onConvert(req: Requirement) {
     if (converting) return;

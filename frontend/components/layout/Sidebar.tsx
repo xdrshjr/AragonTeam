@@ -36,6 +36,11 @@ const NAV: NavItem[] = [
     icon: <Icon path="M3 13h8V3H3zM13 21h8V3h-8zM3 21h8v-6H3z" />,
   },
   {
+    href: "/my-work",
+    label: "我的工作",
+    icon: <Icon path="M20 6 9 17l-5-5" />,
+  },
+  {
     href: "/requirements",
     label: "需求",
     match: "/requirements",

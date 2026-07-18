@@ -159,6 +159,17 @@ export default function TicketDrawer({ entity, id, onClose, onChanged }: Props) 
     }
   }
 
+  // 【Phase-3 §2.5】并发冲突（409 且无 allowed）→ 提示刷新并拉取最新，区别于状态机 409。
+  function handleWriteError(err: unknown, fallback: string) {
+    if (err instanceof ApiError && err.status === 409 && !err.allowed) {
+      toast.error("该工单已被他人更新，已为你刷新最新内容");
+      refresh();
+      loadedRef.current = null; // 允许下次用最新值重置可编辑字段
+      return;
+    }
+    toast.error(err instanceof ApiError ? err.message : fallback);
+  }
+
   async function onSaveDetails() {
     if (!titleInput.trim()) {
       toast.error("标题不能为空");
@@ -170,7 +181,7 @@ export default function TicketDrawer({ entity, id, onClose, onChanged }: Props) 
       toast.success("已保存");
       onChanged?.();
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "保存失败");
+      handleWriteError(err, "保存失败");
     } finally {
       setSavingDetails(false);
     }
@@ -182,7 +193,7 @@ export default function TicketDrawer({ entity, id, onClose, onChanged }: Props) 
       toast.success("已更新");
       onChanged?.();
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "更新失败");
+      handleWriteError(err, "更新失败");
     }
   }
 

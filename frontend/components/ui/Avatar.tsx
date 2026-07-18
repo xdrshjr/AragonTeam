@@ -1,4 +1,4 @@
-import type { AssigneeSummary } from "@/lib/types";
+import type { AssigneeSummary, AuthorSummary } from "@/lib/types";
 
 interface Props {
   // 人：传 name + color；Agent：传 name + isAgent。
@@ -72,5 +72,39 @@ export function AssigneeAvatar({
       size={size}
       title={`${assignee.name}${assignee.type === "agent" ? "（Agent）" : ""}`}
     />
+  );
+}
+
+// 由施动者概要渲染头像（Phase-3 通知铃铛）：user/agent 用常规头像；
+// system / 空施动者用中性圆底 + fallback（如通知类型 emoji）。
+export function AuthorAvatar({
+  author,
+  size = 26,
+  fallback = "🔔",
+}: {
+  author: AuthorSummary | null;
+  size?: number;
+  fallback?: string;
+}) {
+  if (author && (author.type === "user" || author.type === "agent")) {
+    return (
+      <Avatar
+        name={author.name}
+        color={author.avatar_color}
+        isAgent={author.type === "agent"}
+        size={size}
+        title={author.name}
+      />
+    );
+  }
+  return (
+    <span
+      className="inline-flex items-center justify-center rounded-full border border-border bg-black/[0.03] text-ink-muted"
+      style={{ width: size, height: size, fontSize: Math.round(size * 0.5) }}
+      title={author?.name || "系统"}
+      aria-hidden="true"
+    >
+      {fallback}
+    </span>
   );
 }

@@ -1,13 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import useSWR from "swr";
 import { api, listFetcher, ApiError } from "@/lib/api";
 import { useToast } from "@/lib/toast";
 import { useAuth } from "@/lib/auth";
 import type { Requirement } from "@/lib/types";
-import { statusStyle, PRIORITY_STYLES } from "@/lib/constants";
+import { statusStyle, PRIORITY_STYLES, REQUIREMENT_COLUMNS } from "@/lib/constants";
 import Header from "@/components/layout/Header";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
@@ -18,29 +18,73 @@ import EmptyState from "@/components/ui/EmptyState";
 import RequirementForm from "@/components/requirements/RequirementForm";
 import AssigneePicker, { AssigneeValue } from "@/components/AssigneePicker";
 import TicketDrawer from "@/components/TicketDrawer";
+import FilterBar from "@/components/FilterBar";
 
 export default function RequirementsPage() {
   const toast = useToast();
   const { user } = useAuth();
   // 后端 POST /requirements 限 admin|pm（§2.4），member 隐藏新建入口，避免提交后才 403。
   const canCreate = user?.role === "admin" || user?.role === "pm";
-  const { data, mutate } = useSWR("/requirements", listFetcher<Requirement>);
+
+  // 【Phase-3 §2.6】过滤条状态；keyword 防抖后进入查询键。
+  const [keyword, setKeyword] = useState("");
+  const [debounced, setDebounced] = useState("");
+  const [status, setStatus] = useState("");
+  const [priority, setPriority] = useState("");
+  const [assignee, setFilterAssignee] = useState<AssigneeValue>({
+    assignee_type: null,
+    assignee_id: null,
+  });
+
+  // Header 全局搜索：跨页导航时携带 ?q=（进入页面 mount 读取）；已在本页时靠事件即时刷新。
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search).get("q") || "";
+    if (q) {
+      setKeyword(q);
+      setDebounced(q);
+    }
+    function onSearch(e: Event) {
+      const term = (e as CustomEvent<string>).detail?.trim();
+      if (!term) return;
+      setKeyword(term);
+      setDebounced(term);
+    }
+    window.addEventListener("aragon:search", onSearch);
+    return () => window.removeEventListener("aragon:search", onSearch);
+  }, []);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(keyword.trim()), 300);
+    return () => clearTimeout(t);
+  }, [keyword]);
+
+  const params = new URLSearchParams();
+  if (debounced) params.set("q", debounced);
+  if (status) params.set("status", status);
+  if (priority) params.set("priority", priority);
+  if (assignee.assignee_type && assignee.assignee_id != null) {
+    params.set("assignee_type", assignee.assignee_type);
+    params.set("assignee_id", String(assignee.assignee_id));
+  }
+  const listKey = `/requirements${params.toString() ? `?${params.toString()}` : ""}`;
+  const { data, mutate } = useSWR(listKey, listFetcher<Requirement>);
   const reqs = data?.items;
+
   const [creating, setCreating] = useState(false);
   const [openId, setOpenId] = useState<number | null>(null);
   const [assignTarget, setAssignTarget] = useState<Requirement | null>(null);
-  const [assignee, setAssignee] = useState<AssigneeValue>({
+  const [assignee2, setAssignee] = useState<AssigneeValue>({
     assignee_type: null,
     assignee_id: null,
   });
 
   async function doAssign() {
-    if (!assignTarget || !assignee.assignee_type) {
+    if (!assignTarget || !assignee2.assignee_type) {
       toast.error("请选择指派对象");
       return;
     }
     try {
-      await api.patch(`/requirements/${assignTarget.id}/assign`, assignee);
+      await api.patch(`/requirements/${assignTarget.id}/assign`, assignee2);
       toast.success("指派成功");
       setAssignTarget(null);
       setAssignee({ assignee_type: null, assignee_id: null });
@@ -71,13 +115,29 @@ export default function RequirementsPage() {
         }
       />
       <main className="flex-1 overflow-y-auto p-6">
+        <FilterBar
+          keyword={keyword}
+          onKeyword={setKeyword}
+          status={status}
+          onStatus={setStatus}
+          statusOptions={REQUIREMENT_COLUMNS.map((c) => ({ value: c.key, label: c.title }))}
+          level={priority}
+          onLevel={setPriority}
+          levelLabel="优先级"
+          levelOptions={(Object.keys(PRIORITY_STYLES) as (keyof typeof PRIORITY_STYLES)[]).map(
+            (k) => ({ value: k, label: PRIORITY_STYLES[k].label })
+          )}
+          assignee={assignee}
+          onAssignee={setFilterAssignee}
+        />
+
         <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-card">
           {!reqs ? (
             <SkeletonRows rows={6} />
           ) : reqs.length === 0 ? (
             <EmptyState
-              title="还没有需求"
-              hint={canCreate ? "点击右上角「新建需求」开始，或指派给 Agent 让它自动推进。" : "还没有需求。"}
+              title="没有符合条件的需求"
+              hint={canCreate ? "调整筛选，或点击右上角「新建需求」开始。" : "调整筛选条件试试。"}
               action={canCreate ? (
                 <Button size="sm" onClick={() => setCreating(true)}>+ 新建需求</Button>
               ) : undefined}
@@ -175,7 +235,7 @@ export default function RequirementsPage() {
         }
       >
         <p className="mb-4 text-sm text-ink-muted">{assignTarget?.title}</p>
-        <AssigneePicker value={assignee} onChange={setAssignee} />
+        <AssigneePicker value={assignee2} onChange={setAssignee} />
       </Modal>
     </>
   );

@@ -164,3 +164,43 @@ npm run build       # next build
 前端：`NEXT_PUBLIC_API_BASE`（默认 `http://localhost:5000/api`）。
 
 Phase-2 设计与验收细节见 [`docs/plans/aragonteam-phase2/spec.md`](docs/plans/aragonteam-phase2/spec.md)。
+
+---
+
+## Phase-3 能力（从「可信的 Agent 协作平台」到「自主协作的研发中枢」）
+
+在 Phase-2 之上继续做**向后兼容的增量演进与收官**（唯一 schema 变更是新增 `notifications` 表，
+`create_all` 自动建；不改任何既有对外契约）。三根支柱：
+
+- **支柱 A — Agent 自主协作闭环**：`services/agent_autopilot.py` + 一组编排接口，让 Agent
+  **自己认领并推进**一批工作（全程仍走状态机 `can_transition`，复用 Phase-2 `agent_runner`）：
+  - `POST /api/agents/:id/claim-next`——Agent 自动认领其泳道内最久未指派的工单；
+  - `POST /api/agents/:id/autorun[?run=all]`——扫描并连续推进该 Agent 名下所有可推进工单；
+  - `POST /api/agents/:id/tick`——「认领 + 推进」一次自主循环（**旗舰演示**）；
+  - `POST /api/agents/autorun-all`——一键运行整支 AI 团队一轮。
+  运行期间 `agent.status=busy` 作为**软锁**（并发触发 → 409），`finally` 必归 `idle`。
+  前端 Agents 页每张卡新增「自动一轮 / 认领下一个 / 运行队列」，pm/admin 顶部「▶ 运行 AI 团队一轮」。
+- **支柱 B — 通知中心与协作感知**：新增 `notifications` 表 + 通知接口
+  （`GET /api/notifications`、`/unread-count`、`POST /:id/read`、`/read-all`），在
+  **指派 / 评论 / @提及 / 状态推进（含 Agent 自主推进）/ 转 BUG** 等事件上向相关人类用户扇出通知
+  （不给自己 / Agent 发、去重）。前端 Header 新增**通知铃铛**（未读红点 + 下拉 + 点击直达工单 + 一键已读），
+  实时性用 **SWR 轮询**（默认 20s）达成，**零新依赖**（WebSocket/SSE 延期）。
+- **支柱 C — 权限 / 并发 / 检索收官**：
+  - **行级 RBAC**（收口 `# TODO(rbac-row-level)`）：patch/move 需 `can_manage_ticket`（reporter /
+    人类 assignee / pm / admin）；assign / 转 BUG / 删除 / autopilot 需 pm/admin；
+    `agent-advance` 需 pm/admin 或 `can_manage_ticket`（**有意收紧**，防旁路 move/patch 门禁）。
+  - **乐观并发守卫**：`PATCH /:id` 与 `/:id/move` 接受可选 `expected_updated_at`，冲突返回 409
+    （体含 `detail.current_updated_at`、**无** `allowed`，与状态机 409 区分），前端提示刷新，杜绝拖拽丢更新。
+  - **过滤 / 检索**：列表接口加 `q/status/priority/severity/assignee_*/reporter_id`（全部可选、向后兼容）；
+    新增 **`GET /api/me/work`「我的工作」聚合**（指派给我 / 我提交的）与 **Header 全局搜索**、
+    列表页过滤条、侧边栏「我的工作」入口、通知点击 `?ticket=<id>` 直达工单抽屉。
+
+Phase-3 后端 pytest 在 Phase-2 基础上扩充至 **93 用例全绿**（新增 agent_autopilot / notifications /
+concurrency / search，并扩充 rbac）。前端 `tsc --noEmit` 0 error、`next build` 通过。
+
+> **契约变更提示（诚实标注）**：`agent-advance` 在 Phase-2 为「仅需登录即可推进任意工单」，Phase-3
+> **有意收紧**为「pm/admin 或 `can_manage_ticket`」以防 RBAC 旁路——Phase-2 的
+> `test_member_can_comment_and_advance` 已按新契约改写（member 评论仍 201；member 对非归属单
+> `agent-advance` 现为 403）。这是**明示的契约变更**，非「零变更」。
+
+Phase-3 设计与验收细节见 [`docs/plans/aragonteam-phase3/spec.md`](docs/plans/aragonteam-phase3/spec.md)。

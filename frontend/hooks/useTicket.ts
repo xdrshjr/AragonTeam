@@ -68,11 +68,17 @@ export function useTicket(entity: Entity, id: number | null) {
   const patch = useCallback(
     async (body: Record<string, unknown>) => {
       if (!id) return;
-      await api.patch(`/${entity}/${id}`, body);
+      // 【Phase-3 §2.5】乐观并发守卫：携当前已加载 ticket 的 updated_at；
+      // 后端比对不一致 → 409（无 allowed），由调用方分流提示 + 刷新。
+      const payload =
+        ticket?.updated_at && body.expected_updated_at === undefined
+          ? { ...body, expected_updated_at: ticket.updated_at }
+          : body;
+      await api.patch(`/${entity}/${id}`, payload);
       mutateTicket();
       mutateFeed();
     },
-    [entity, id, mutateTicket, mutateFeed]
+    [entity, id, ticket, mutateTicket, mutateFeed]
   );
 
   const convertToBug = useCallback(async (): Promise<Bug | null> => {

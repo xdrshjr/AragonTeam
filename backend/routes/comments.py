@@ -16,6 +16,7 @@ from models.activity import Activity
 from models.comment import Comment, _resolve_author
 from services.auth_helpers import current_user
 from services.pagination import paginate, with_total_count
+from services import notifications
 
 bp = Blueprint("comments", __name__, url_prefix="/api")
 
@@ -64,6 +65,10 @@ def _create_comment(entity: str, entity_id: int):
         body=body,
     )
     db.session.add(comment)
+    # 【Phase-3 §2.3】扇出：评论通知参与者（排除作者本人 / Agent），并解析 @提及。
+    actor = ("user", user.id) if user else ("system", None)
+    notifications.notify_comment(obj, entity, comment, actor)
+    notifications.notify_mentions(comment, actor)
     db.session.commit()
     return jsonify(comment.to_dict()), 201
 

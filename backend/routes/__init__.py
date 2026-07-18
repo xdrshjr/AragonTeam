@@ -8,6 +8,8 @@ from routes.bugs import bp as bugs_bp
 from routes.board import bp as board_bp
 from routes.stats import bp as stats_bp
 from routes.comments import bp as comments_bp
+from routes.notifications import bp as notifications_bp
+from routes.me import bp as me_bp
 
 
 def register_blueprints(app):
@@ -20,3 +22,6 @@ def register_blueprints(app):
     app.register_blueprint(board_bp)
     app.register_blueprint(stats_bp)
     app.register_blueprint(comments_bp)
+    # —— Phase-3：通知中心 + 「我的工作」〔R3-02：me 蓝图独立前缀 /api/me〕——
+    app.register_blueprint(notifications_bp)
+    app.register_blueprint(me_bp)

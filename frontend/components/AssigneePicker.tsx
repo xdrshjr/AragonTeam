@@ -38,7 +38,7 @@ export default function AssigneePicker({ label = "指派给", value, onChange }:
 
   return (
     <div className="flex flex-col gap-1.5">
-      <label className="text-sm font-medium text-ink">{label}</label>
+      {label ? <label className="text-sm font-medium text-ink">{label}</label> : null}
       <select
         value={current}
         onChange={(e) => handle(e.target.value)}

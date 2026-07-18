@@ -1,13 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import useSWR from "swr";
 import { api, listFetcher, ApiError } from "@/lib/api";
 import { useToast } from "@/lib/toast";
 import { useAuth } from "@/lib/auth";
 import type { Bug } from "@/lib/types";
-import { statusStyle, SEVERITY_STYLES } from "@/lib/constants";
+import { statusStyle, SEVERITY_STYLES, BUG_COLUMNS } from "@/lib/constants";
 import Header from "@/components/layout/Header";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
@@ -18,29 +18,64 @@ import EmptyState from "@/components/ui/EmptyState";
 import BugForm from "@/components/bugs/BugForm";
 import AssigneePicker, { AssigneeValue } from "@/components/AssigneePicker";
 import TicketDrawer from "@/components/TicketDrawer";
+import FilterBar from "@/components/FilterBar";
 
 export default function BugsPage() {
   const toast = useToast();
   const { user } = useAuth();
   // 后端 POST /bugs 限 admin|pm（§2.4），member 隐藏新建入口，避免提交后才 403。
   const canCreate = user?.role === "admin" || user?.role === "pm";
-  const { data, mutate } = useSWR("/bugs", listFetcher<Bug>);
+
+  // 【Phase-3 §2.6】过滤条状态（BUG 侧的等级为 severity）。
+  const [keyword, setKeyword] = useState("");
+  const [debounced, setDebounced] = useState("");
+  const [status, setStatus] = useState("");
+  const [severity, setSeverity] = useState("");
+  const [assignee, setFilterAssignee] = useState<AssigneeValue>({
+    assignee_type: null,
+    assignee_id: null,
+  });
+
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search).get("q") || "";
+    if (q) {
+      setKeyword(q);
+      setDebounced(q);
+    }
+  }, []);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(keyword.trim()), 300);
+    return () => clearTimeout(t);
+  }, [keyword]);
+
+  const params = new URLSearchParams();
+  if (debounced) params.set("q", debounced);
+  if (status) params.set("status", status);
+  if (severity) params.set("severity", severity);
+  if (assignee.assignee_type && assignee.assignee_id != null) {
+    params.set("assignee_type", assignee.assignee_type);
+    params.set("assignee_id", String(assignee.assignee_id));
+  }
+  const listKey = `/bugs${params.toString() ? `?${params.toString()}` : ""}`;
+  const { data, mutate } = useSWR(listKey, listFetcher<Bug>);
   const bugs = data?.items;
+
   const [creating, setCreating] = useState(false);
   const [openId, setOpenId] = useState<number | null>(null);
   const [assignTarget, setAssignTarget] = useState<Bug | null>(null);
-  const [assignee, setAssignee] = useState<AssigneeValue>({
+  const [assignee2, setAssignee] = useState<AssigneeValue>({
     assignee_type: null,
     assignee_id: null,
   });
 
   async function doAssign() {
-    if (!assignTarget || !assignee.assignee_type) {
+    if (!assignTarget || !assignee2.assignee_type) {
       toast.error("请选择指派对象");
       return;
     }
     try {
-      await api.patch(`/bugs/${assignTarget.id}/assign`, assignee);
+      await api.patch(`/bugs/${assignTarget.id}/assign`, assignee2);
       toast.success("指派成功");
       setAssignTarget(null);
       setAssignee({ assignee_type: null, assignee_id: null });
@@ -71,13 +106,29 @@ export default function BugsPage() {
         }
       />
       <main className="flex-1 overflow-y-auto p-6">
+        <FilterBar
+          keyword={keyword}
+          onKeyword={setKeyword}
+          status={status}
+          onStatus={setStatus}
+          statusOptions={BUG_COLUMNS.map((c) => ({ value: c.key, label: c.title }))}
+          level={severity}
+          onLevel={setSeverity}
+          levelLabel="严重度"
+          levelOptions={(Object.keys(SEVERITY_STYLES) as (keyof typeof SEVERITY_STYLES)[]).map(
+            (k) => ({ value: k, label: SEVERITY_STYLES[k].label })
+          )}
+          assignee={assignee}
+          onAssignee={setFilterAssignee}
+        />
+
         <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-card">
           {!bugs ? (
             <SkeletonRows rows={6} />
           ) : bugs.length === 0 ? (
             <EmptyState
-              title="还没有 BUG"
-              hint={canCreate ? "点击右上角「新建 BUG」开始，或从需求「转 BUG」流转过来。" : "还没有 BUG。"}
+              title="没有符合条件的 BUG"
+              hint={canCreate ? "调整筛选，或点击右上角「新建 BUG」，或从需求「转 BUG」流转过来。" : "调整筛选条件试试。"}
               action={canCreate ? (
                 <Button size="sm" onClick={() => setCreating(true)}>+ 新建 BUG</Button>
               ) : undefined}
@@ -176,7 +227,7 @@ export default function BugsPage() {
         }
       >
         <p className="mb-4 text-sm text-ink-muted">{assignTarget?.title}</p>
-        <AssigneePicker value={assignee} onChange={setAssignee} />
+        <AssigneePicker value={assignee2} onChange={setAssignee} />
       </Modal>
     </>
   );

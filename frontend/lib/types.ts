@@ -185,3 +185,79 @@ export interface Stats {
 
 // 任何卡片实体（需求 | BUG）的公共形状，看板通用组件用。
 export type Card = Requirement | Bug;
+
+// —— Phase-3：通知中心 ——
+
+export type NotificationType =
+  | "assigned"
+  | "commented"
+  | "mentioned"
+  | "status_changed"
+  | "agent_advanced"
+  | "converted";
+
+export interface Notification {
+  id: number;
+  type: NotificationType;
+  entity_type: "requirement" | "bug" | null;
+  entity_id: number | null;
+  actor_type: "user" | "agent" | "system" | null;
+  actor_id: number | null;
+  actor: AuthorSummary | null;
+  message: string;
+  is_read: boolean;
+  created_at: string;
+}
+
+// —— Phase-3：Agent 自主编排结果 ——
+
+export interface AutopilotAdvanced {
+  entity: "requirement" | "bug";
+  id: number;
+  from: string;
+  to: string;
+  message: string;
+}
+export interface AutopilotSkipped {
+  entity?: "requirement" | "bug";
+  id?: number;
+  reason: string; // no-action | terminal | cap | busy
+}
+export interface AutopilotClaimed {
+  entity: "requirement" | "bug";
+  id: number;
+  status: string;
+}
+
+// POST /agents/:id/claim-next
+export interface ClaimResult {
+  claimed: Requirement | Bug | null;
+}
+// POST /agents/:id/autorun
+export interface AutorunResult {
+  agent: Agent;
+  advanced: AutopilotAdvanced[];
+  skipped: AutopilotSkipped[];
+}
+// POST /agents/:id/tick
+export interface TickResult {
+  agent: Agent;
+  claimed: AutopilotClaimed[];
+  advanced: AutopilotAdvanced[];
+  skipped: AutopilotSkipped[];
+}
+// POST /agents/autorun-all
+export interface AutorunAllResult {
+  runs: {
+    agent: Agent;
+    claimed: AutopilotClaimed[];
+    advanced: AutopilotAdvanced[];
+    skipped: AutopilotSkipped[];
+  }[];
+}
+
+// —— Phase-3：「我的工作」聚合（GET /me/work）——
+export interface MeWork {
+  assigned: { requirements: Requirement[]; bugs: Bug[] };
+  reported: { requirements: Requirement[]; bugs: Bug[] };
+}

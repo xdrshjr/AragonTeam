@@ -12,6 +12,7 @@ from models.requirement import Requirement
 from models.bug import Bug
 from models.activity import Activity
 from models.comment import Comment
+from models.notification import Notification
 
 # 头像底色（暖色系，与 auth._PALETTE 一致）。
 _COLORS = ["#C15F3C", "#3B6EA5", "#6E8B3D", "#8A5A9B", "#C99A2E", "#4B8B8B"]
@@ -132,6 +133,27 @@ def seed_if_empty():
         Comment(entity_type="requirement", entity_id=demo_req.id,
                 author_type="user", author_id=users["alice"].id,
                 body="记得同步一下接口契约，别改动 Phase-1 的返回结构。"),
+    ])
+
+    # —— Phase-3：示例通知（未读 / 已读混合），让通知铃铛开箱即有内容（§3.1）——
+    # 收件人均为人类 member（alice / bob）；点击 entity 直达对应工单抽屉。
+    db.session.add_all([
+        Notification(user_id=users["alice"].id, type="assigned",
+                     entity_type="requirement", entity_id=requirements[1].id,
+                     actor_type="user", actor_id=users["pm"].id, is_read=False,
+                     message="指派给你：需求「需求看板支持拖拽排序」"),
+        Notification(user_id=users["alice"].id, type="agent_advanced",
+                     entity_type="requirement", entity_id=demo_req.id,
+                     actor_type="agent", actor_id=dev_agent.id, is_read=False,
+                     message="dev-agent 把需求「接入 dev-agent 自动认领需求」推进：assigned → in_development"),
+        Notification(user_id=users["bob"].id, type="assigned",
+                     entity_type="requirement", entity_id=requirements[3].id,
+                     actor_type="user", actor_id=users["pm"].id, is_read=False,
+                     message="指派给你：需求「统一全局错误响应契约」"),
+        Notification(user_id=users["bob"].id, type="commented",
+                     entity_type="requirement", entity_id=demo_req.id,
+                     actor_type="user", actor_id=users["alice"].id, is_read=True,
+                     message="需求「接入 dev-agent 自动认领需求」有新评论：记得同步一下接口契约…"),
     ])
 
     db.session.commit()

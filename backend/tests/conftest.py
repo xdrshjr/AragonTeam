@@ -15,23 +15,27 @@ from models.agent import Agent
 from models.project import Project
 from services import ratelimit
 
-# 各角色 seed 账号（用户名, 密码）。
+# 各角色 seed 账号（用户名, 密码）。Phase-3 增 member2 供跨用户 RBAC / 通知测试。
 CREDENTIALS = {
     "admin": ("admin", "admin123"),
     "pm": ("pm", "pm123"),
     "member": ("member", "member123"),
+    "member2": ("member2", "member2123"),
 }
 
 
 def _install_fixtures() -> dict:
-    """注入最小 fixture：admin/pm/member 各一、dev/qa Agent 各一、一个项目。"""
+    """注入最小 fixture：admin/pm/member/member2、dev/qa Agent 各一、一个项目。"""
     admin = User(username="admin", role="admin", display_name="Ada", avatar_color="#C15F3C")
     admin.set_password("admin123")
     pm = User(username="pm", role="pm", display_name="Peter", avatar_color="#3B6EA5")
     pm.set_password("pm123")
     member = User(username="member", role="member", display_name="Mia", avatar_color="#6E8B3D")
     member.set_password("member123")
-    db.session.add_all([admin, pm, member])
+    # Phase-3：第二名 member，供「跨用户」RBAC / 通知场景（如 member2 评论 member 的单）。
+    member2 = User(username="member2", role="member", display_name="Max", avatar_color="#8A5A9B")
+    member2.set_password("member2123")
+    db.session.add_all([admin, pm, member, member2])
 
     dev = Agent(name="dev-agent", kind="dev", status="idle", description="dev agent")
     qa = Agent(name="qa-agent", kind="qa", status="idle", description="qa agent")
@@ -44,6 +48,7 @@ def _install_fixtures() -> dict:
 
     return {
         "admin_id": admin.id, "pm_id": pm.id, "member_id": member.id,
+        "member2_id": member2.id,
         "dev_agent_id": dev.id, "qa_agent_id": qa.id, "project_id": project.id,
     }
 
