@@ -7,6 +7,7 @@ from routes.requirements import bp as requirements_bp
 from routes.bugs import bp as bugs_bp
 from routes.board import bp as board_bp
 from routes.stats import bp as stats_bp
+from routes.comments import bp as comments_bp
 
 
 def register_blueprints(app):
@@ -18,3 +19,4 @@ def register_blueprints(app):
     app.register_blueprint(bugs_bp)
     app.register_blueprint(board_bp)
     app.register_blueprint(stats_bp)
+    app.register_blueprint(comments_bp)

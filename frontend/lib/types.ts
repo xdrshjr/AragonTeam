@@ -107,6 +107,57 @@ export interface Activity {
   created_at: string;
 }
 
+// —— Phase-2：评论、合并 feed、Agent 推进结果 ——
+
+export type AuthorType = "user" | "agent" | "system";
+
+// to_dict 里 join 出的作者概要（user/agent/system 三态；已删除降级为占位）。
+export interface AuthorSummary {
+  type: AuthorType;
+  id?: number | null;
+  name: string;
+  avatar_color?: string | null; // user
+  kind?: AgentKind;             // agent
+}
+
+export interface Comment {
+  id: number;
+  entity_type: "requirement" | "bug";
+  entity_id: number;
+  author_type: AuthorType;
+  author_id: number | null;
+  author: AuthorSummary;
+  body: string;
+  created_at: string;
+}
+
+// 合并 feed 的两种元素，以 kind 判别（后端已合并排序，前端只渲染）。
+export interface FeedActivityItem {
+  kind: "activity";
+  id: number;
+  action: string;
+  from_status: string | null;
+  to_status: string | null;
+  actor: AuthorSummary | null;
+  message: string | null;
+  created_at: string;
+}
+export interface FeedCommentItem extends Comment {
+  kind: "comment";
+}
+export type FeedItem = FeedActivityItem | FeedCommentItem;
+
+export interface Feed {
+  items: FeedItem[];
+}
+
+// POST /:entity/:id/agent-advance（单步）返回。
+export interface AgentAdvanceResult {
+  ticket: Requirement | Bug;
+  comment: Comment;
+  agent: Agent;
+}
+
 // 看板列。
 export interface BoardColumn<T> {
   key: string;
@@ -120,8 +171,15 @@ export interface Board<T> {
 export interface Stats {
   requirements: { total: number; by_status: Record<string, number> };
   bugs: { total: number; by_status: Record<string, number> };
-  agents: { total: number; idle: number; busy: number; offline: number };
+  agents: {
+    total: number;
+    idle: number;
+    busy: number;
+    offline: number;
+    utilization: number; // busy / total（0..1）
+  };
   members: number;
+  activities_this_week: number;
   recent_activities: Activity[];
 }
 

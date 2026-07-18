@@ -9,6 +9,7 @@ from .project import Project
 from .requirement import Requirement, PRIORITIES, ASSIGNEE_TYPES
 from .bug import Bug, SEVERITIES
 from .activity import Activity, ENTITY_TYPES, ACTOR_TYPES
+from .comment import Comment, COMMENT_AUTHOR_TYPES, COMMENT_ENTITY_TYPES
 
 __all__ = [
     "User", "ROLES",
@@ -17,4 +18,5 @@ __all__ = [
     "Requirement", "PRIORITIES", "ASSIGNEE_TYPES",
     "Bug", "SEVERITIES",
     "Activity", "ENTITY_TYPES", "ACTOR_TYPES",
+    "Comment", "COMMENT_AUTHOR_TYPES", "COMMENT_ENTITY_TYPES",
 ]

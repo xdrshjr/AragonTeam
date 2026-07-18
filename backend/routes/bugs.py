@@ -1,7 +1,7 @@
-"""BUG 路由（§4.4）。CRUD + assign + move。
+"""BUG 路由（§4.4 + Phase-2）。CRUD + assign + move + **agent-advance**。
 
-与需求 move 共享同一套契约：迁移只认 workflow 邻接表，position 落列尾。
-assign / move 仅 @jwt_required()（【R-08】）。# TODO(rbac-row-level)
+与需求 move 共享同一套契约：迁移只认 workflow 邻接表，move 支持 position 精确插入。
+assign / move / agent-advance 仅 @jwt_required()（【R-08】）。# TODO(rbac-row-level)
 """
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required
@@ -12,9 +12,14 @@ from models.requirement import Requirement
 from models.user import User
 from models.agent import Agent
 from models.activity import Activity
+from models.comment import Comment
 from services import workflow
 from services.auth_helpers import require_role, current_user
-from routes.requirements import _next_position, _validate_assignee, _actor
+from services.pagination import paginate, with_total_count
+from routes.requirements import (
+    _next_position, _validate_assignee, _validate_project, _actor,
+    _coerce_index, _reindex_column, do_agent_advance,
+)
 
 bp = Blueprint("bugs", __name__, url_prefix="/api/bugs")
 
@@ -32,8 +37,11 @@ def list_bugs():
         q = q.filter_by(status=status)
     if assignee_id is not None:
         q = q.filter_by(assignee_id=assignee_id)
-    rows = q.order_by(Bug.position.asc(), Bug.id.asc()).all()
-    return jsonify([b.to_dict() for b in rows]), 200
+    # 【Phase-2 §2.5-3】分页（非破坏）：裸数组 + X-Total-Count。
+    q = q.order_by(Bug.position.asc(), Bug.id.asc())
+    rows, total = paginate(q)
+    resp = jsonify([b.to_dict() for b in rows])
+    return with_total_count(resp, total), 200
 
 
 @bp.post("")
@@ -46,6 +54,10 @@ def create_bug():
     severity = data.get("severity") or "major"
     if severity not in SEVERITIES:
         return jsonify({"error": "invalid severity", "detail": {"allowed": list(SEVERITIES)}}), 400
+    # §2.8-1：project_id 存在性校验。
+    perr = _validate_project(data.get("project_id"))
+    if perr:
+        return perr
 
     related = data.get("related_requirement_id")
     if related is not None and db.session.get(Requirement, related) is None:
@@ -86,18 +98,26 @@ def patch_bug(bug_id):
     if bug is None:
         return jsonify({"error": "bug not found"}), 404
     data = request.get_json(silent=True) or {}
+    changed = False
     if "title" in data:
         title = (data.get("title") or "").strip()
         if not title:
             return jsonify({"error": "title cannot be empty"}), 400
         bug.title = title
+        changed = True
     if "description" in data:
         bug.description = data["description"]
+        changed = True
     if "severity" in data:
         if data["severity"] not in SEVERITIES:
             return jsonify({"error": "invalid severity",
                             "detail": {"allowed": list(SEVERITIES)}}), 400
         bug.severity = data["severity"]
+        changed = True
+    # §2.8-3：编辑进时间线。
+    if changed:
+        Activity.log("bug", bug.id, "updated", actor=_actor(),
+                     to_status=bug.status, message="更新了 BUG 信息")
     db.session.commit()
     return jsonify(bug.to_dict()), 200
 
@@ -117,13 +137,13 @@ def assign_bug(bug_id):
         return err
 
     bug.assignee_type = assignee_type
-    bug.assignee_id = assignee_id
+    bug.assignee_id = int(assignee_id)  # §2.8-4：入库前统一 int。
     frm = bug.status
     if bug.status == "open" and workflow.can_transition("bug", "open", "assigned"):
         bug.status = "assigned"
         bug.position = _next_position(Bug, "assigned")
 
-    target = db.session.get(User if assignee_type == "user" else Agent, assignee_id)
+    target = db.session.get(User if assignee_type == "user" else Agent, bug.assignee_id)
     name = getattr(target, "display_name", None) or getattr(target, "name", str(assignee_id))
     Activity.log("bug", bug.id, "assigned", actor=_actor(),
                  from_status=frm, to_status=bug.status,
@@ -145,8 +165,13 @@ def move_bug(bug_id):
                         "detail": {"allowed": workflow.column_keys("bug")}}), 400
 
     frm = bug.status
+    index = _coerce_index(data.get("position"))
     if frm == to:
-        bug.position = _next_position(Bug, to)
+        # 同列内拖动（Phase-2 §2.6）。
+        if index is not None:
+            _reindex_column(Bug, to, insert_id=bug.id, insert_index=index)
+        else:
+            bug.position = _next_position(Bug, to)
         db.session.commit()
         return jsonify(bug.to_dict()), 200
 
@@ -158,11 +183,20 @@ def move_bug(bug_id):
         }), 409
 
     bug.status = to
-    bug.position = _next_position(Bug, to)  # 【R-09】# TODO(board-reorder)
+    if index is not None:
+        _reindex_column(Bug, to, insert_id=bug.id, insert_index=index)
+    else:
+        bug.position = _next_position(Bug, to)
     Activity.log("bug", bug.id, "moved", actor=_actor(),
                  from_status=frm, to_status=to, message=f"状态 {frm} → {to}")
     db.session.commit()
     return jsonify(bug.to_dict()), 200
+
+
+@bp.post("/<int:bug_id>/agent-advance")
+@jwt_required()  # 【R-08】仅需登录。# TODO(rbac-row-level)
+def agent_advance_bug(bug_id):
+    return do_agent_advance("bug", Bug, bug_id)
 
 
 @bp.delete("/<int:bug_id>")
@@ -171,6 +205,11 @@ def delete_bug(bug_id):
     bug = db.session.get(Bug, bug_id)
     if bug is None:
         return jsonify({"error": "bug not found"}), 404
+    # §5：删单一并删其评论。
+    Comment.query.filter_by(entity_type="bug", entity_id=bug_id).delete()
+    # §2.8-3：删除进时间线。
+    Activity.log("bug", bug_id, "deleted", actor=_actor(),
+                 from_status=bug.status, message=f"删除 BUG「{bug.title}」")
     db.session.delete(bug)
     db.session.commit()
     return "", 204

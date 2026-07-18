@@ -1,6 +1,7 @@
 "use client";
 
 import { useDroppable } from "@dnd-kit/core";
+import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import type { Card, Requirement } from "@/lib/types";
 import KanbanCard from "@/components/kanban/KanbanCard";
 
@@ -10,6 +11,7 @@ interface Props {
   items: Card[];
   entity: "requirements" | "bugs";
   onConvert?: (req: Requirement) => void;
+  onOpen?: (card: Card) => void;
 }
 
 // 单列（droppable）+ 列头计数。
@@ -19,6 +21,7 @@ export default function KanbanColumn({
   items,
   entity,
   onConvert,
+  onOpen,
 }: Props) {
   const { setNodeRef, isOver } = useDroppable({ id: columnKey });
 
@@ -40,14 +43,21 @@ export default function KanbanColumn({
             : "border-transparent bg-black/[0.02]",
         ].join(" ")}
       >
-        {items.map((card) => (
-          <KanbanCard
-            key={card.id}
-            card={card}
-            entity={entity}
-            onConvert={onConvert}
-          />
-        ))}
+        {/* Phase-2 §2.6：列内可排序上下文，支撑同列精确重排。 */}
+        <SortableContext
+          items={items.map((c) => c.id)}
+          strategy={verticalListSortingStrategy}
+        >
+          {items.map((card) => (
+            <KanbanCard
+              key={card.id}
+              card={card}
+              entity={entity}
+              onConvert={onConvert}
+              onOpen={onOpen}
+            />
+          ))}
+        </SortableContext>
         {items.length === 0 && (
           <div className="flex flex-1 items-center justify-center py-6 text-xs text-ink-muted/70">
             拖拽卡片到此

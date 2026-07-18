@@ -1,0 +1,3 @@
+# 开发期依赖（Phase-2 §3.2）——仅用于运行后端测试套件，运行时不需要。
+# 安装：pip install -r requirements.txt -r requirements-dev.txt
+pytest==7.4.4

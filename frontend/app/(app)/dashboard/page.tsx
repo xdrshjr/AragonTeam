@@ -4,17 +4,38 @@ import useSWR from "swr";
 import Link from "next/link";
 import { swrFetcher } from "@/lib/api";
 import type { Stats } from "@/lib/types";
-import { statusStyle, REQUIREMENT_COLUMNS, BUG_COLUMNS } from "@/lib/constants";
+import {
+  statusStyle,
+  actionLabel,
+  REQUIREMENT_COLUMNS,
+  BUG_COLUMNS,
+} from "@/lib/constants";
 import Header from "@/components/layout/Header";
 
-function actionLabel(a: string): string {
+// 单行占比条（纯 CSS，零图表依赖，§2.7）：宽度 = count / total。
+function DistRow({
+  title,
+  count,
+  total,
+  color,
+}: {
+  title: string;
+  count: number;
+  total: number;
+  color: string;
+}) {
+  const pct = total > 0 ? Math.round((count / total) * 100) : 0;
   return (
-    {
-      created: "创建",
-      assigned: "指派",
-      moved: "流转",
-      converted: "转 BUG",
-    }[a] || a
+    <div className="flex items-center gap-3">
+      <span className="w-14 shrink-0 text-xs text-ink-muted">{title}</span>
+      <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-black/[0.05]">
+        <div
+          className="h-full rounded-full transition-[width] duration-500"
+          style={{ width: `${pct}%`, backgroundColor: color, minWidth: count > 0 ? 6 : 0 }}
+        />
+      </div>
+      <span className="w-6 text-right text-xs font-medium text-ink">{count}</span>
+    </div>
   );
 }
 
@@ -29,8 +50,12 @@ export default function DashboardPage() {
       value: stats ? `${stats.agents.idle} / ${stats.agents.total}` : "—",
       href: "/agents",
     },
-    { label: "团队成员", value: stats?.members ?? "—", href: "/team" },
+    { label: "本周活动数", value: stats?.activities_this_week ?? "—", href: "/dashboard" },
   ];
+
+  const reqTotal = stats?.requirements.total ?? 0;
+  const bugTotal = stats?.bugs.total ?? 0;
+  const utilizationPct = stats ? Math.round(stats.agents.utilization * 100) : 0;
 
   return (
     <>
@@ -51,54 +76,69 @@ export default function DashboardPage() {
         </div>
 
         <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
-          {/* 需求分布 */}
+          {/* 需求分布（占比条） */}
           <div className="rounded-xl border border-border bg-surface p-5 shadow-card">
-            <div className="mb-3 flex items-center justify-between">
+            <div className="mb-4 flex items-center justify-between">
               <h2 className="font-serif text-lg text-ink">需求分布</h2>
               <Link href="/requirements/board" className="text-xs text-clay-dark hover:underline">
                 看板 →
               </Link>
             </div>
-            <div className="space-y-2">
-              {REQUIREMENT_COLUMNS.map((col) => {
-                const n = stats?.requirements.by_status[col.key] ?? 0;
-                return (
-                  <div key={col.key} className="flex items-center justify-between text-sm">
-                    <span className="text-ink-muted">{col.title}</span>
-                    <span className="font-medium text-ink">{n}</span>
-                  </div>
-                );
-              })}
+            <div className="space-y-2.5">
+              {REQUIREMENT_COLUMNS.map((col) => (
+                <DistRow
+                  key={col.key}
+                  title={col.title}
+                  count={stats?.requirements.by_status[col.key] ?? 0}
+                  total={reqTotal}
+                  color={statusStyle(col.key).fg}
+                />
+              ))}
             </div>
           </div>
 
-          {/* BUG 分布 */}
+          {/* BUG 分布（占比条） */}
           <div className="rounded-xl border border-border bg-surface p-5 shadow-card">
-            <div className="mb-3 flex items-center justify-between">
+            <div className="mb-4 flex items-center justify-between">
               <h2 className="font-serif text-lg text-ink">BUG 分布</h2>
               <Link href="/bugs/board" className="text-xs text-clay-dark hover:underline">
                 看板 →
               </Link>
             </div>
-            <div className="space-y-2">
-              {BUG_COLUMNS.map((col) => {
-                const n = stats?.bugs.by_status[col.key] ?? 0;
-                return (
-                  <div key={col.key} className="flex items-center justify-between text-sm">
-                    <span className="text-ink-muted">{col.title}</span>
-                    <span className="font-medium text-ink">{n}</span>
-                  </div>
-                );
-              })}
+            <div className="space-y-2.5">
+              {BUG_COLUMNS.map((col) => (
+                <DistRow
+                  key={col.key}
+                  title={col.title}
+                  count={stats?.bugs.by_status[col.key] ?? 0}
+                  total={bugTotal}
+                  color={statusStyle(col.key).fg}
+                />
+              ))}
             </div>
           </div>
 
-          {/* 最近活动（人 / Agent 混合协作轨迹） */}
+          {/* Agent 利用率 + 最近活动 */}
           <div className="rounded-xl border border-border bg-surface p-5 shadow-card">
-            <h2 className="mb-3 font-serif text-lg text-ink">最近活动</h2>
+            <h2 className="mb-4 font-serif text-lg text-ink">Agent 利用率</h2>
+            <div className="mb-2 flex items-baseline justify-between">
+              <span className="font-serif text-2xl text-ink">{utilizationPct}%</span>
+              <span className="text-xs text-ink-muted">
+                忙 {stats?.agents.busy ?? 0} · 闲 {stats?.agents.idle ?? 0} · 离线{" "}
+                {stats?.agents.offline ?? 0}
+              </span>
+            </div>
+            <div className="h-2.5 overflow-hidden rounded-full bg-black/[0.05]">
+              <div
+                className="h-full rounded-full bg-clay transition-[width] duration-500"
+                style={{ width: `${utilizationPct}%` }}
+              />
+            </div>
+
+            <h3 className="mb-2 mt-5 text-sm font-semibold text-ink">最近活动</h3>
             <div className="space-y-3">
               {stats?.recent_activities?.length ? (
-                stats.recent_activities.map((a) => (
+                stats.recent_activities.slice(0, 6).map((a) => (
                   <div key={a.id} className="flex items-start gap-2 text-sm">
                     <span
                       className="mt-1.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full"

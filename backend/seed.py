@@ -11,6 +11,7 @@ from models.project import Project
 from models.requirement import Requirement
 from models.bug import Bug
 from models.activity import Activity
+from models.comment import Comment
 
 # 头像底色（暖色系，与 auth._PALETTE 一致）。
 _COLORS = ["#C15F3C", "#3B6EA5", "#6E8B3D", "#8A5A9B", "#C99A2E", "#4B8B8B"]
@@ -107,9 +108,31 @@ def seed_if_empty():
     Activity.log("requirement", requirements[2].id, "assigned",
                  actor=("user", users["pm"].id), from_status="assigned",
                  to_status="assigned", message="指派给 Agent「dev-agent」")
+    # Phase-2：一条 Agent 推进活动，让 agent_advanced 动作在 feed / 仪表盘一启动就可见。
+    Activity.log("requirement", requirements[2].id, "agent_advanced",
+                 actor=("agent", dev_agent.id), from_status="assigned",
+                 to_status="in_development",
+                 message="dev-agent 已认领需求，拆解任务、拉起开发分支。")
     Activity.log("requirement", requirements[1].id, "moved",
                  actor=("user", users["alice"].id), from_status="testing",
                  to_status="reviewing", message="状态 testing → reviewing")
+
+    # —— Phase-2：示例评论（人 + Agent + 系统混合讨论），让工单详情 feed 开箱有料 ——
+    demo_req = requirements[2]  # 「接入 dev-agent 自动认领需求」
+    db.session.add_all([
+        Comment(entity_type="requirement", entity_id=demo_req.id,
+                author_type="user", author_id=users["pm"].id,
+                body="这条需求交给 dev-agent 先跑起来，测试阶段再让 qa-agent 接手。"),
+        Comment(entity_type="requirement", entity_id=demo_req.id,
+                author_type="agent", author_id=dev_agent.id,
+                body="dev-agent 已认领需求，拆解任务、拉起开发分支。"),
+        Comment(entity_type="requirement", entity_id=demo_req.id,
+                author_type="system", author_id=None,
+                body="工单已从「已指派」流转至「开发中」。"),
+        Comment(entity_type="requirement", entity_id=demo_req.id,
+                author_type="user", author_id=users["alice"].id,
+                body="记得同步一下接口契约，别改动 Phase-1 的返回结构。"),
+    ])
 
     db.session.commit()
     return True

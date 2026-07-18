@@ -14,9 +14,10 @@ export function useBoard(entity: Entity, projectId?: number) {
   const key = `/board/${entity}${projectId ? `?project_id=${projectId}` : ""}`;
   const { data, error, isLoading, mutate } = useSWR<Board<Card>>(key, swrFetcher);
 
-  // 把某卡从当前列移动到 toStatus 列（乐观更新，失败回滚 + toast）。
+  // 把某卡移动到 toStatus 列的 toIndex 位置（乐观更新，失败回滚 + toast）。
+  // toIndex 缺省 = 追加列尾；支持同列精确重排（Phase-2 §2.6）。
   const move = useCallback(
-    async (cardId: number, toStatus: string) => {
+    async (cardId: number, toStatus: string, toIndex?: number) => {
       if (!data) return;
 
       // 定位卡片与源列。
@@ -30,29 +31,33 @@ export function useBoard(entity: Entity, projectId?: number) {
           break;
         }
       }
-      if (!card || fromStatus === toStatus) return;
+      if (!card) return;
+      // 同列且未指定插入索引 → 无操作（整列拖放且无重排意图）。
+      if (fromStatus === toStatus && toIndex === undefined) return;
 
       const snapshot = data; // 回滚快照
 
-      // 乐观：从源列移除，追加到目标列尾（与后端 position 语义一致）。
+      // 乐观：先从所在列移除该卡，再插入目标列 toIndex（缺省列尾）。
       const optimistic: Board<Card> = {
         columns: data.columns.map((col) => {
-          if (col.key === fromStatus) {
-            return { ...col, items: col.items.filter((c) => c.id !== cardId) };
-          }
+          const items = col.items.filter((c) => c.id !== cardId);
           if (col.key === toStatus) {
             // 覆盖 status 后整体断言为 Card（联合类型无法逐字段收窄）。
             const moved = { ...card!, status: toStatus } as Card;
-            return { ...col, items: [...col.items, moved] };
+            const idx = toIndex == null ? items.length : Math.min(toIndex, items.length);
+            return { ...col, items: [...items.slice(0, idx), moved, ...items.slice(idx)] };
           }
-          return col;
+          return { ...col, items };
         }),
       };
 
       try {
         await mutate(
           async () => {
-            await api.patch(`/${entity}/${cardId}/move`, { status: toStatus });
+            await api.patch(`/${entity}/${cardId}/move`, {
+              status: toStatus,
+              position: toIndex,
+            });
             // 拉取权威数据（后端已算好 position）。
             return await api.get<Board<Card>>(key);
           },

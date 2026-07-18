@@ -1,10 +1,11 @@
-"""鉴权路由（§4.1）。login / me / register(admin)。"""
-from flask import Blueprint, request, jsonify
+"""鉴权路由（§4.1 + Phase-2）。login（含限流）/ me / register(admin)。"""
+from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import create_access_token, jwt_required
 
 from extensions import db
 from models.user import User, ROLES
 from services.auth_helpers import current_user, require_role
+from services import ratelimit
 
 bp = Blueprint("auth", __name__, url_prefix="/api/auth")
 
@@ -17,10 +18,19 @@ def login():
     if not username or not password:
         return jsonify({"error": "username and password are required"}), 400
 
+    # 【Phase-2 §2.5-4】登录限流：键为 ip:username，仅拦失败尝试；成功清零。
+    ip = request.remote_addr or "unknown"
+    key = f"{ip}:{username}"
+    max_attempts = current_app.config.get("LOGIN_MAX_ATTEMPTS", 10)
+    if ratelimit.is_blocked(key, max_attempts):
+        return jsonify({"error": "too many attempts, try later"}), 429
+
     user = User.query.filter_by(username=username).first()
     if user is None or not user.check_password(password):
+        ratelimit.record_failure(key)
         return jsonify({"error": "invalid username or password"}), 401
 
+    ratelimit.clear(key)  # 成功清零，避免误伤后续正常登录。
     # 【R-01】identity 必须是字符串（str(user.id)），否则受保护接口会 422。
     token = create_access_token(
         identity=str(user.id),

@@ -107,3 +107,60 @@ npm run dev
 - **审计时间线**：每次创建 / 指派 / 流转 / 转 BUG 都写入 `activities`，记录人 / Agent 混合协作轨迹。
 
 设计与验收细节见 [`docs/plans/aragonteam-mvp/spec.md`](docs/plans/aragonteam-mvp/spec.md)。
+
+---
+
+## Phase-2 能力（从「可运行骨架」到「可信的 Agent 协作平台」）
+
+在 Phase-1 MVP 之上做**向后兼容的增量演进与加固**（不改任何既有对外契约）：
+
+- **Agent 协作运行时**：`POST /api/{requirements|bugs}/:id/agent-advance` 让指派给 Agent 的工单
+  真正**推进一步**——按状态机（邻接表，绝不绕过）流转 + 以 Agent 身份留一条工作说明评论 +
+  写 `actor_type=agent` 的审计。确定性离线模拟，未来替换 `agent_runner._perform` 即可接真实 Agent。
+  另有 `?run=all` 连续推进至无动作 / 终态 / 6 步上限。
+- **讨论与工单详情**：新增 `comments` 表 + 评论/合并 `feed` 接口；前端 **TicketDrawer** 右侧抽屉
+  （点击任意看板卡片或列表行打开），内含详情编辑、指派、转 BUG、**人/Agent/系统混合时间流**、
+  评论输入框与「让 Agent 处理下一步」。
+- **可靠性加固**：结构化日志 + 请求 ID（`X-Request-Id`）、列表分页（`?limit/offset` + `X-Total-Count`，
+  非破坏）、登录限流（滑动窗口，MVP 单机版）、全局 500 事务回滚、SQLite 外键约束（限方言）、
+  健康检查加 DB 探活（`GET /api/health` → `{db:"ok"|"error"}`）。
+- **顶级打磨**：骨架屏 / 空状态 / 错误边界（段级 + 根级 + 404）、看板同列拖拽精确重排、
+  仪表盘分布可视化（纯 CSS 占比条）+ Agent 利用率 + 本周活动、Agents 页工单负载与最近活动、
+  Modal/Toast/抽屉可访问性补强。
+
+### 后端测试（Phase-2 可靠性硬指标）
+
+```powershell
+cd backend
+pip install -r requirements.txt -r requirements-dev.txt
+pytest -q
+```
+
+内存 SQLite + 独立 `TestConfig`（`StaticPool` 固定连接、关闭启动 seed、限流阈调小），
+覆盖鉴权 / CRUD / 状态机 / Agent 运行时 / 评论合并流 / RBAC / 健康检查（P-T1…P-T8）。
+
+### 前端质量门禁
+
+```
+cd frontend
+npm run typecheck   # tsc --noEmit
+npm run build       # next build
+```
+
+### 环境变量
+
+后端全部配置项可用环境变量覆盖（均有开发默认值，开箱即用）：
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `SECRET_KEY` | `aragon-dev-secret-change-me` | Flask 密钥（生产务必覆盖）|
+| `JWT_SECRET_KEY` | `aragon-dev-jwt-secret-change-me` | JWT 签名密钥（生产务必覆盖）|
+| `JWT_ACCESS_TOKEN_EXPIRES` | `86400`（秒）| 访问令牌有效期 |
+| `DATABASE_URL` | `sqlite:///backend/aragon.db` | 数据库 URI（沿用既有名）|
+| `CORS_ORIGINS` | `http://localhost:3000` | 允许的前端 origin（逗号分隔）|
+| `LOGIN_MAX_ATTEMPTS` | `10` | 登录限流阈值（5 分钟窗口内失败上限）|
+| `SEED_ON_STARTUP` | `true` | 启动时是否幂等 seed（测试关闭）|
+
+前端：`NEXT_PUBLIC_API_BASE`（默认 `http://localhost:5000/api`）。
+
+Phase-2 设计与验收细节见 [`docs/plans/aragonteam-phase2/spec.md`](docs/plans/aragonteam-phase2/spec.md)。

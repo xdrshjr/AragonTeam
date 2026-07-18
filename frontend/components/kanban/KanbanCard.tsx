@@ -1,6 +1,7 @@
 "use client";
 
-import { useDraggable } from "@dnd-kit/core";
+import { useSortable } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import type { Card, Requirement, Bug } from "@/lib/types";
 import { AssigneeAvatar } from "@/components/ui/Avatar";
 import Badge from "@/components/ui/Badge";
@@ -11,22 +12,27 @@ interface Props {
   entity: "requirements" | "bugs";
   overlay?: boolean; // DragOverlay 里渲染时禁用 dnd 绑定
   onConvert?: (req: Requirement) => void; // 需求转 BUG
+  onOpen?: (card: Card) => void; // 点击卡片打开工单详情抽屉（§2.4，与拖拽互斥）
 }
 
 function isBug(card: Card): card is Bug {
   return (card as Bug).severity !== undefined;
 }
 
-export default function KanbanCard({ card, entity, overlay, onConvert }: Props) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+export default function KanbanCard({ card, entity, overlay, onConvert, onOpen }: Props) {
+  // Phase-2 §2.6：改用 useSortable 支持同列精确重排（SortableContext 内生效）。
+  const {
+    attributes, listeners, setNodeRef, transform, transition, isDragging,
+  } = useSortable({
     id: card.id,
     data: { fromStatus: card.status },
     disabled: overlay,
   });
 
-  const style = transform
-    ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` }
-    : undefined;
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
 
   const badge = isBug(card)
     ? SEVERITY_STYLES[card.severity]
@@ -48,6 +54,8 @@ export default function KanbanCard({ card, entity, overlay, onConvert }: Props) 
         overlay ? "shadow-lift rotate-[1.5deg]" : "cursor-grab active:cursor-grabbing",
         isDragging ? "opacity-40" : "",
       ].join(" ")}
+      // 点击打开详情抽屉；拖拽与点击互斥由 KanbanBoard 的 dragging 守卫兜底（§2.4）。
+      onClick={overlay ? undefined : () => onOpen?.(card)}
       {...(overlay ? {} : listeners)}
       {...(overlay ? {} : attributes)}
     >
@@ -71,7 +79,7 @@ export default function KanbanCard({ card, entity, overlay, onConvert }: Props) 
         )}
         {canConvert && onConvert && (
           <button
-            // 阻止拖拽监听吞掉点击。
+            // 阻止拖拽监听吞掉点击，并避免冒泡到卡片 onClick（打开抽屉）。
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();

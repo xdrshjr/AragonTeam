@@ -62,7 +62,13 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={api}>
       {children}
-      <div className="pointer-events-none fixed bottom-6 right-6 z-[60] flex flex-col gap-2">
+      {/* §2.7 a11y：屏幕阅读器播报 toast（礼貌模式，不打断当前朗读）。 */}
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="pointer-events-none fixed bottom-6 right-6 z-[60] flex flex-col gap-2"
+      >
         {toasts.map((t) => {
           const s = KIND_STYLE[t.kind];
           return (

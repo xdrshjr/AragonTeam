@@ -11,6 +11,8 @@ import logging
 from flask import jsonify
 from werkzeug.exceptions import HTTPException
 
+from extensions import db
+
 log = logging.getLogger("aragon.errors")
 
 
@@ -26,6 +28,11 @@ def register_error_handlers(app, jwt):
         # HTTPException 已被上面的处理器接管，这里只处理真正未捕获的异常。
         if isinstance(e, HTTPException):
             return jsonify({"error": e.name, "detail": e.description}), e.code
+        # 【Phase-2 §2.5-2】先回滚半提交事务，避免污染后续请求（连接被复用）。
+        try:
+            db.session.rollback()
+        except Exception:  # pragma: no cover - 回滚本身失败仅记日志，不掩盖原异常
+            log.exception("rollback after unhandled exception failed")
         log.exception("Unhandled exception: %s", e)
         return jsonify({"error": "internal server error"}), 500
 

@@ -1,19 +1,24 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { useBoard } from "@/hooks/useBoard";
+import type { Card } from "@/lib/types";
 import Header from "@/components/layout/Header";
 import Button from "@/components/ui/Button";
 import KanbanBoard from "@/components/kanban/KanbanBoard";
+import TicketDrawer from "@/components/TicketDrawer";
+import { SkeletonBoard } from "@/components/ui/Skeleton";
 
 export default function BugsBoardPage() {
-  const { board, isLoading, move } = useBoard("bugs");
+  const { board, isLoading, move, mutate } = useBoard("bugs");
+  const [openId, setOpenId] = useState<number | null>(null);
 
   return (
     <>
       <Header
         title="BUG 看板"
-        subtitle="拖拽卡片以流转状态 · 合法性由后端状态机裁决"
+        subtitle="拖拽卡片以流转状态 / 同列重排 · 点击卡片查看详情与协作"
         action={
           <Link href="/bugs">
             <Button variant="ghost" size="sm">
@@ -24,13 +29,23 @@ export default function BugsBoardPage() {
       />
       <main className="flex-1 overflow-hidden p-6">
         {isLoading || !board ? (
-          <div className="flex h-full items-center justify-center text-ink-muted">
-            加载看板中…
-          </div>
+          <SkeletonBoard columns={5} />
         ) : (
-          <KanbanBoard board={board} entity="bugs" onMove={move} />
+          <KanbanBoard
+            board={board}
+            entity="bugs"
+            onMove={move}
+            onOpen={(card: Card) => setOpenId(card.id)}
+          />
         )}
       </main>
+
+      <TicketDrawer
+        entity="bugs"
+        id={openId}
+        onClose={() => setOpenId(null)}
+        onChanged={() => mutate()}
+      />
     </>
   );
 }

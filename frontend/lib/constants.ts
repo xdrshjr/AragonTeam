@@ -88,3 +88,35 @@ export const AGENT_STATUS_LABELS: Record<string, string> = {
 export function statusStyle(key: string): BadgeStyle {
   return STATUS_STYLES[key] || { label: key, bg: "#EDEAE3", fg: "#6E6A62" };
 }
+
+// —— Phase-2：活动动作中文名（含 agent_advanced / updated / deleted）——
+export const ACTION_LABELS: Record<string, string> = {
+  created: "创建",
+  assigned: "指派",
+  moved: "流转",
+  converted: "转 BUG",
+  agent_advanced: "Agent 推进",
+  updated: "更新",
+  deleted: "删除",
+  commented: "评论",
+};
+
+export function actionLabel(action: string): string {
+  return ACTION_LABELS[action] || action;
+}
+
+// —— Phase-2：作者类型视觉映射（feed 区分 人 / Agent / 系统）——
+export interface AuthorStyle {
+  label: string;
+  bg: string;
+  fg: string;
+}
+export const AUTHOR_STYLES: Record<string, AuthorStyle> = {
+  user: { label: "成员", bg: "#DCE7F2", fg: "#3B6EA5" },
+  agent: { label: "Agent", bg: "#F3DCD1", fg: "#A44E30" },
+  system: { label: "系统", bg: "#EDEAE3", fg: "#6E6A62" },
+};
+
+export function authorStyle(type: string): AuthorStyle {
+  return AUTHOR_STYLES[type] || AUTHOR_STYLES.system;
+}

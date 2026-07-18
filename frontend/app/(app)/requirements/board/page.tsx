@@ -6,16 +6,19 @@ import { useRouter } from "next/navigation";
 import { api, ApiError } from "@/lib/api";
 import { useToast } from "@/lib/toast";
 import { useBoard } from "@/hooks/useBoard";
-import type { Requirement, Bug } from "@/lib/types";
+import type { Requirement, Bug, Card } from "@/lib/types";
 import Header from "@/components/layout/Header";
 import Button from "@/components/ui/Button";
 import KanbanBoard from "@/components/kanban/KanbanBoard";
+import TicketDrawer from "@/components/TicketDrawer";
+import { SkeletonBoard } from "@/components/ui/Skeleton";
 
 export default function RequirementsBoardPage() {
   const router = useRouter();
   const toast = useToast();
   const { board, isLoading, move, mutate } = useBoard("requirements");
   const [converting, setConverting] = useState(false);
+  const [openId, setOpenId] = useState<number | null>(null);
 
   async function onConvert(req: Requirement) {
     if (converting) return;
@@ -37,7 +40,7 @@ export default function RequirementsBoardPage() {
     <>
       <Header
         title="需求看板"
-        subtitle="拖拽卡片以流转状态 · 合法性由后端状态机裁决"
+        subtitle="拖拽卡片以流转状态 / 同列重排 · 点击卡片查看详情与协作"
         action={
           <Link href="/requirements">
             <Button variant="ghost" size="sm">
@@ -48,18 +51,24 @@ export default function RequirementsBoardPage() {
       />
       <main className="flex-1 overflow-hidden p-6">
         {isLoading || !board ? (
-          <div className="flex h-full items-center justify-center text-ink-muted">
-            加载看板中…
-          </div>
+          <SkeletonBoard columns={7} />
         ) : (
           <KanbanBoard
             board={board}
             entity="requirements"
             onMove={move}
             onConvert={onConvert}
+            onOpen={(card: Card) => setOpenId(card.id)}
           />
         )}
       </main>
+
+      <TicketDrawer
+        entity="requirements"
+        id={openId}
+        onClose={() => setOpenId(null)}
+        onChanged={() => mutate()}
+      />
     </>
   );
 }
