@@ -1,0 +1,76 @@
+import type { AssigneeSummary } from "@/lib/types";
+
+interface Props {
+  // 人：传 name + color；Agent：传 name + isAgent。
+  name: string;
+  color?: string | null;
+  isAgent?: boolean;
+  size?: number;
+  title?: string;
+}
+
+// 人=首字母彩底圆形头像；Agent=机器人图标。
+export default function Avatar({ name, color, isAgent, size = 28, title }: Props) {
+  const initial = (name || "?").trim().charAt(0).toUpperCase();
+  const dim = { width: size, height: size, fontSize: Math.round(size * 0.42) };
+
+  if (isAgent) {
+    return (
+      <span
+        title={title || name}
+        className="inline-flex items-center justify-center rounded-lg bg-ink text-white"
+        style={dim}
+        aria-label={`Agent ${name}`}
+      >
+        {/* 简约机器人图标 */}
+        <svg width={size * 0.6} height={size * 0.6} viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"
+             strokeLinejoin="round">
+          <rect x="4" y="7" width="16" height="12" rx="2" />
+          <path d="M12 7V4M8 12h.01M16 12h.01M9 16h6" />
+        </svg>
+      </span>
+    );
+  }
+
+  return (
+    <span
+      title={title || name}
+      className="inline-flex items-center justify-center rounded-full font-semibold text-white select-none"
+      style={{ ...dim, backgroundColor: color || "#C15F3C" }}
+      aria-label={name}
+    >
+      {initial}
+    </span>
+  );
+}
+
+// 便捷：由 assignee 概要渲染头像；未指派返回占位。
+export function AssigneeAvatar({
+  assignee,
+  size = 28,
+}: {
+  assignee: AssigneeSummary | null;
+  size?: number;
+}) {
+  if (!assignee) {
+    return (
+      <span
+        className="inline-flex items-center justify-center rounded-full border border-dashed border-border text-ink-muted"
+        style={{ width: size, height: size, fontSize: size * 0.5 }}
+        title="未指派"
+      >
+        ·
+      </span>
+    );
+  }
+  return (
+    <Avatar
+      name={assignee.name}
+      color={assignee.avatar_color}
+      isAgent={assignee.type === "agent"}
+      size={size}
+      title={`${assignee.name}${assignee.type === "agent" ? "（Agent）" : ""}`}
+    />
+  );
+}

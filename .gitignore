@@ -1,0 +1,29 @@
+# —— Python / 后端 ——
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.db
+backend/aragon.db
+
+# —— Node / 前端 ——
+node_modules/
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+
+# —— 环境变量 ——
+.env
+.env.*
+!.env.local.example
+
+# —— 编辑器 / 系统 ——
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# —— Agent 运行时 / 工具目录（非项目源码，勿提交）——
+.agentmesh/
+.claude/

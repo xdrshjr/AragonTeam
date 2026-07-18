@@ -1,0 +1,48 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* §2.5 基础排版：衬线标题、暖底、仅浅色。 */
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  html,
+  body {
+    height: 100%;
+  }
+
+  body {
+    background-color: #f7f4ee; /* ivory */
+    color: #1a1a17; /* ink */
+    font-family: system-ui, Inter, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: Georgia, "Tiempos", serif;
+    letter-spacing: -0.01em;
+  }
+}
+
+@layer utilities {
+  /* 隐藏滚动条但保留滚动（看板横向滚动用）。 */
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+/* 拖拽时禁止文本选中，避免选区高亮干扰。 */
+.dnd-dragging,
+.dnd-dragging * {
+  user-select: none;
+  cursor: grabbing !important;
+}
