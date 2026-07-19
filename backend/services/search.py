@@ -13,10 +13,17 @@ DEFAULT_LIMIT = 5
 MAX_LIMIT = 20
 
 
+def escape_like(s: str) -> str:
+    """转义 LIKE 元字符（% _ \\），供检索与列表过滤复用（§2.4-C1）。
+
+    转义后须搭配 `ilike(..., escape="\\")` 使用，令用户输入的 `%`/`_` 作字面量匹配。
+    """
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _like_clause(model, keyword: str):
     """构造 title/description 的大小写不敏感 LIKE 子句，转义 LIKE 元字符。"""
-    escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    like = f"%{escaped}%"
+    like = f"%{escape_like(keyword)}%"
     return or_(model.title.ilike(like, escape="\\"),
                model.description.ilike(like, escape="\\"))
 

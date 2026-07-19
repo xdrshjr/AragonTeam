@@ -251,3 +251,43 @@ python app.py
 ```
 
 设计与验收细节见 [`docs/plans/real-agent-execution/spec.md`](docs/plans/real-agent-execution/spec.md)。
+
+---
+
+## 稳健化收官（Reliability Hardening）—— 每个功能都不报错、每个页面都能正确使用
+
+在既有 8 个里程碑之上做一次**面向缺陷的收敛式加固**：不新增任何业务功能、不新增数据库表、
+不新增前后端运行时依赖，只把「点了会 500 / 换页会崩 / 后端抖动就卡骨架 / 无权却给按钮」这些
+真实缺口逐一堵住。
+
+- **后端输入边界校验（坏输入 400 不 500）**：新增 `services/validation.py`
+  （`json_body()` + `want_str/want_int/want_bool` + `ValidationError`），把 12 个写路由里
+  重复且脆弱的 `request.get_json(silent=True) or {}` + `(x or "").strip()` 收敛为一处可复用、
+  可单测的边界模块。非对象 JSON 体（`5`/`[1]`/`"x"`）、非字符串字段（`username=123`）、
+  非法主键（`project_id=[1]`）等**坏输入统一走 400 JSON 契约** `{error, detail:{field,expected}}`，
+  **绝不冒泡成 5xx**（含公开 `POST /api/auth/login`）。看板 `move` 的 `status` 也先归一为字符串，
+  杜绝 `["assigned"]` 触发的 `unhashable` 500。
+- **SWR key/fetcher 形状一致性（消灭崩溃与卡死）**：确立不变量——**一个 SWR key 在全应用只对应
+  一种 fetcher 返回形状**；据此拆开 Agents 页与列表页对 `/requirements`、`/bugs` 的 key 冲突
+  （裸数组 vs `{items,total}`），根治「先开列表再开 Agents 页整页崩」「反向导航显示共 undefined 条」。
+  新增 `components/ui/ErrorState.tsx`（内联错误 + 重试），列表/详情/仪表盘/我的工作/通知等页面
+  读 `error` 渲染错误态，后端抖动不再永久卡骨架。
+- **权限门禁与交互正确性**：TicketDrawer 的「保存详情 / 改派 / 让 Agent 处理」按 `can_manage`/`pm-admin`
+  门禁隐藏（后端仍是权威，前端只收敛「可见即可用」）；转 BUG 后用 `?ticket=` 直达新卡；
+  Agent 禁止被手动置 `busy`（防 autopilot 软锁死锁）；徽章枚举越界中性兜底；通知偏好切换失败提示。
+- **错误码修正（更对，不破坏任何正常用法）**：坏输入 **500→400**；无效/伪造 JWT **422→401**
+  （前端据 401 自动登出重定向，杜绝会话卡死）。**成功路径契约零变更**。
+
+### 质量门禁
+
+```powershell
+cd backend
+pytest -q            # 222 用例全绿（含新增 test_validation.py 等）
+```
+```
+cd frontend
+npm run typecheck    # tsc --noEmit → 0 error
+npm run build        # next build → 成功
+```
+
+设计与验收细节见 [`docs/plans/reliability-hardening/spec.md`](docs/plans/reliability-hardening/spec.md)。

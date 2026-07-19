@@ -12,6 +12,7 @@ from flask import jsonify
 from werkzeug.exceptions import HTTPException
 
 from extensions import db
+from services.validation import ValidationError
 
 log = logging.getLogger("aragon.errors")
 
@@ -21,6 +22,14 @@ def register_error_handlers(app, jwt):
     @app.errorhandler(HTTPException)
     def handle_http_exception(e: HTTPException):
         return jsonify({"error": e.name, "detail": e.description}), e.code
+
+    # —— 边界校验失败（§2.2）：坏输入统一 400，绝不冒泡 500 ——
+    @app.errorhandler(ValidationError)
+    def handle_validation_error(e: ValidationError):
+        body = {"error": e.message}
+        if e.field is not None:
+            body["detail"] = {"field": e.field, "expected": e.expected}
+        return jsonify(body), 400
 
     # —— 兜底 500：记录日志但不泄露堆栈 ——
     @app.errorhandler(Exception)
@@ -44,8 +53,9 @@ def register_error_handlers(app, jwt):
 
     @jwt.invalid_token_loader
     def _invalid_token(reason):
-        # token 非法 / sub 类型错（见 R-01）→ 422。
-        return jsonify({"error": "invalid token", "detail": reason}), 422
+        # 【§2.4-C2】token 非法 / sub 类型错（见 R-01）→ 401（前端据 401 自动登出重定向；
+        # 422 会让每个请求都失败却不跳登录，会话「卡死」）。与 expired/revoked 一致。
+        return jsonify({"error": "invalid token", "detail": reason}), 401
 
     @jwt.expired_token_loader
     def _expired_token(jwt_header, jwt_payload):

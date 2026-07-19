@@ -8,8 +8,9 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required
 
 from extensions import db
-from models.agent import Agent, AGENT_KINDS, AGENT_STATUSES
+from models.agent import Agent, AGENT_KINDS
 from services.auth_helpers import require_role
+from services.validation import json_body, want_str
 from services import agent_autopilot
 
 bp = Blueprint("agents", __name__, url_prefix="/api/agents")
@@ -37,15 +38,14 @@ def list_agents():
 @bp.post("")
 @require_role("admin", "pm")
 def create_agent():
-    data = request.get_json(silent=True) or {}
-    name = (data.get("name") or "").strip()
-    kind = data.get("kind") or "generic"
+    # 【§2.2】非串 name → 400（此前 .strip() 500）；kind 走 choices 归一。
+    data = json_body()
+    name = want_str(data, "name")
+    kind = want_str(data, "kind", default="generic", choices=AGENT_KINDS)
     description = data.get("description")
 
     if not name:
         return jsonify({"error": "name is required"}), 400
-    if kind not in AGENT_KINDS:
-        return jsonify({"error": "invalid kind", "detail": {"allowed": list(AGENT_KINDS)}}), 400
     if Agent.query.filter_by(name=name).first():
         return jsonify({"error": "agent name already exists"}), 409
 
@@ -70,25 +70,25 @@ def patch_agent(agent_id):
     agent = db.session.get(Agent, agent_id)
     if agent is None:
         return jsonify({"error": "agent not found"}), 404
-    data = request.get_json(silent=True) or {}
+    data = json_body()
 
     if "name" in data:                                   # 新增：支持改名（编辑 Agent 的核心）
-        name = (data.get("name") or "").strip()
+        name = want_str(data, "name")                    # 非串 name → 400（此前 .strip() 500）
         if not name:
             return jsonify({"error": "name is required"}), 400
         if Agent.query.filter(Agent.name == name, Agent.id != agent.id).first():
             return jsonify({"error": "agent name already exists"}), 409
         agent.name = name
     if "kind" in data:                                   # 新增：支持改类型
-        if data["kind"] not in AGENT_KINDS:
-            return jsonify({"error": "invalid kind",
-                            "detail": {"allowed": list(AGENT_KINDS)}}), 400
-        agent.kind = data["kind"]
+        agent.kind = want_str(data, "kind", required=True, choices=AGENT_KINDS)
     if "status" in data:
-        if data["status"] not in AGENT_STATUSES:
-            return jsonify({"error": "invalid status",
-                            "detail": {"allowed": list(AGENT_STATUSES)}}), 400
-        agent.status = data["status"]
+        # 【§2.3-B3】禁止手动置 busy：busy 是 autopilot 运行期软锁，被手动置入后
+        # /autorun、/tick 恒 409 且无自动恢复，Agent 永久卡死。仅允许 idle/offline，
+        # 保留 pm/admin 把误锁 Agent 手动置回 idle 的能力。
+        status = want_str(data, "status")
+        if status not in ("idle", "offline"):
+            return jsonify({"error": "status must be idle or offline"}), 400
+        agent.status = status
     if "description" in data:
         agent.description = data["description"]
 
@@ -105,7 +105,7 @@ def agents_autorun_all():
 
     注意：本路由须在 `/<int:agent_id>/...` 之前无冲突（'autorun-all' 非 int，路由不歧义）。
     """
-    data = request.get_json(silent=True) or {}
+    data = json_body()
     claim = data.get("claim", True)
     run_all = request.args.get("run") == "all"
     runs = []
@@ -131,7 +131,7 @@ def agent_claim_next(agent_id):
     agent = db.session.get(Agent, agent_id)
     if agent is None:
         return jsonify({"error": "agent not found"}), 404
-    data = request.get_json(silent=True) or {}
+    data = json_body()
     entity = data.get("entity")  # 可选：限定只认领某类
     _ent, ticket = agent_autopilot.claim_next(agent, entity=entity)
     db.session.commit()
@@ -163,7 +163,7 @@ def agent_tick(agent_id):
         return jsonify({"error": "agent not found"}), 404
     if agent.status == "busy":
         return jsonify({"error": "agent is busy"}), 409  # 软锁
-    data = request.get_json(silent=True) or {}
+    data = json_body()
     claim = data.get("claim", True)
     claim_count = data.get("claim_count", 1)
     run_all = request.args.get("run") == "all"

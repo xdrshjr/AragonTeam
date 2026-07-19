@@ -11,9 +11,12 @@ def test_create_bug_defaults_open(client, auth):
 
 
 def test_create_bug_rejects_bad_severity(client, auth):
+    # 【§2.2.3 归一回归】非法 severity 仍 400；错误体归一为统一 {error, detail:{field,expected}}
+    # 契约（message 由 "invalid severity" 归一为 "severity is invalid"，仍 400、语义不变）。
     r = client.post("/api/bugs", json={"title": "x", "severity": "sev0"}, headers=auth("pm"))
     assert r.status_code == 400
-    assert r.get_json()["error"] == "invalid severity"
+    assert r.get_json()["error"]
+    assert r.get_json()["detail"]["field"] == "severity"
 
 
 def test_bug_move_legal_and_illegal(client, auth, make_bug, data):
@@ -44,3 +47,12 @@ def test_delete_bug_cascades_comments(client, auth, make_bug):
     assert r.status_code == 204
     # 删单后工单不存在
     assert client.get(f"/api/bugs/{bug['id']}", headers=auth("pm")).status_code == 404
+
+
+def test_move_non_string_status_returns_400_not_500(client, auth, make_bug, data):
+    """【§2.3-B1】非串 status 此前触 unhashable 500——现 400。"""
+    bug = make_bug(assignee=("user", data["member_id"]))
+    r = client.patch(f"/api/bugs/{bug['id']}/move", json={"status": ["fixing"]},
+                     headers=auth("pm"))
+    assert r.status_code == 400
+    assert r.status_code != 500

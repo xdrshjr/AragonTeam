@@ -1,10 +1,11 @@
 """用户路由（§4.2）。list / create / get / patch。"""
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, jsonify
 from flask_jwt_extended import jwt_required
 
 from extensions import db
 from models.user import User, ROLES
 from services.auth_helpers import require_role
+from services.validation import json_body, want_str
 from routes.auth import _pick_color
 
 bp = Blueprint("users", __name__, url_prefix="/api/users")
@@ -20,17 +21,16 @@ def list_users():
 @bp.post("")
 @require_role("admin")
 def create_user():
-    data = request.get_json(silent=True) or {}
-    username = (data.get("username") or "").strip()
-    password = data.get("password") or ""
-    role = data.get("role") or "member"
-    display_name = data.get("display_name") or username
+    # 【§2.2】非串 username/display_name → 400（此前 .strip() 500）；role 走 choices 归一。
+    data = json_body()
+    username = want_str(data, "username")
+    password = want_str(data, "password", strip=False)
+    role = want_str(data, "role", default="member", choices=ROLES)
+    display_name = want_str(data, "display_name") or username
     email = data.get("email")
 
     if not username or not password:
         return jsonify({"error": "username and password are required"}), 400
-    if role not in ROLES:
-        return jsonify({"error": "invalid role", "detail": {"allowed": list(ROLES)}}), 400
     if User.query.filter_by(username=username).first():
         return jsonify({"error": "username already exists"}), 409
 
@@ -57,18 +57,17 @@ def patch_user(user_id):
     user = db.session.get(User, user_id)
     if user is None:
         return jsonify({"error": "user not found"}), 404
-    data = request.get_json(silent=True) or {}
+    data = json_body()
 
     if "role" in data:
-        if data["role"] not in ROLES:
-            return jsonify({"error": "invalid role", "detail": {"allowed": list(ROLES)}}), 400
-        user.role = data["role"]
+        user.role = want_str(data, "role", required=True, choices=ROLES)
     if "display_name" in data:
-        user.display_name = data["display_name"]
+        # 非串 display_name → 400（此前直接赋值，落库后 to_dict 类型脏）。
+        user.display_name = want_str(data, "display_name")
     if "email" in data:
         user.email = data["email"]
     if data.get("password"):
-        user.set_password(data["password"])
+        user.set_password(want_str(data, "password", strip=False, required=True))
 
     db.session.commit()
     return jsonify(user.to_dict()), 200

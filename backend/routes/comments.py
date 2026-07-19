@@ -6,7 +6,7 @@
 
 把「合并复杂度」收在后端：前端只渲染 feed.items，无需二次拉取与合并。
 """
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, jsonify
 from flask_jwt_extended import jwt_required
 
 from extensions import db
@@ -16,6 +16,7 @@ from models.activity import Activity
 from models.comment import Comment, _resolve_author
 from services.auth_helpers import current_user
 from services.pagination import paginate, with_total_count
+from services.validation import json_body, want_str
 from services import notifications
 
 bp = Blueprint("comments", __name__, url_prefix="/api")
@@ -52,8 +53,9 @@ def _create_comment(entity: str, entity_id: int):
     obj, err = _get_entity_or_404(entity, entity_id)
     if err:
         return err
-    data = request.get_json(silent=True) or {}
-    body = (data.get("body") or "").strip()
+    # 【§2.2】非对象体 / 非串 body → 400（此前 .get/.strip/@提及正则 500）。
+    data = json_body()
+    body = want_str(data, "body")
     if not body:
         return jsonify({"error": "comment body is required"}), 400
 

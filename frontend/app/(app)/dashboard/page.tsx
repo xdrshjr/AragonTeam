@@ -11,6 +11,7 @@ import {
   BUG_COLUMNS,
 } from "@/lib/constants";
 import Header from "@/components/layout/Header";
+import ErrorState from "@/components/ui/ErrorState";
 
 // 单行占比条（纯 CSS，零图表依赖，§2.7）：宽度 = count / total。
 function DistRow({
@@ -40,7 +41,7 @@ function DistRow({
 }
 
 export default function DashboardPage() {
-  const { data: stats } = useSWR<Stats>("/stats", swrFetcher);
+  const { data: stats, error, mutate } = useSWR<Stats>("/stats", swrFetcher);
 
   const cards = [
     { label: "需求总数", value: stats?.requirements.total ?? "—", href: "/requirements" },
@@ -61,6 +62,10 @@ export default function DashboardPage() {
     <>
       <Header title="仪表盘" subtitle="团队与 Agent 协作全景" />
       <main className="flex-1 overflow-y-auto p-6">
+        {error && !stats ? (
+          <ErrorState message="无法加载仪表盘数据" onRetry={() => mutate()} />
+        ) : (
+        <>
         {/* 统计卡 */}
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
           {cards.map((c) => (
@@ -161,6 +166,8 @@ export default function DashboardPage() {
             </div>
           </div>
         </div>
+        </>
+        )}
       </main>
     </>
   );

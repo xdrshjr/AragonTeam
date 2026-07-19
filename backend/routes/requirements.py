@@ -29,6 +29,8 @@ from services.auth_helpers import (
     require_role, current_user, can_manage_ticket, forbidden,
 )
 from services.pagination import paginate, with_total_count
+from services.search import escape_like
+from services.validation import json_body, want_str, want_int
 
 bp = Blueprint("requirements", __name__, url_prefix="/api/requirements")
 
@@ -152,9 +154,10 @@ def list_requirements():
     if reporter_id is not None:
         q = q.filter_by(reporter_id=reporter_id)
     if keyword:
-        like = f"%{keyword}%"
-        q = q.filter(or_(Requirement.title.ilike(like),
-                         Requirement.description.ilike(like)))
+        # 【§2.4-C1】转义 LIKE 元字符（% _ \），令用户输入的 % / _ 作字面量匹配，与 search 一致。
+        like = f"%{escape_like(keyword)}%"
+        q = q.filter(or_(Requirement.title.ilike(like, escape="\\"),
+                         Requirement.description.ilike(like, escape="\\")))
     # 【Phase-2 §2.5-3】分页（非破坏）：响应体仍为裸数组，总数经 X-Total-Count 暴露。
     q = q.order_by(Requirement.position.asc(), Requirement.id.asc())
     rows, total = paginate(q)
@@ -165,15 +168,14 @@ def list_requirements():
 @bp.post("")
 @require_role("admin", "pm")
 def create_requirement():
-    data = request.get_json(silent=True) or {}
-    title = (data.get("title") or "").strip()
-    if not title:
-        return jsonify({"error": "title is required"}), 400
-    priority = data.get("priority") or "medium"
-    if priority not in PRIORITIES:
-        return jsonify({"error": "invalid priority", "detail": {"allowed": list(PRIORITIES)}}), 400
+    # 【§2.2】非串 title → 400（此前 .strip() 500）；priority 走 choices 归一；
+    # project_id 走 want_int（list/dict 主键此前进 db.session.get 触 500）。
+    data = json_body()
+    title = want_str(data, "title", required=True, max_len=200)
+    priority = want_str(data, "priority", default="medium", choices=PRIORITIES)
+    project_id = want_int(data, "project_id")
     # §2.8-1：project_id 存在性校验（此前接受任意值不校验）。
-    perr = _validate_project(data.get("project_id"))
+    perr = _validate_project(project_id)
     if perr:
         return perr
 
@@ -182,7 +184,7 @@ def create_requirement():
         title=title,
         description=data.get("description"),
         priority=priority,
-        project_id=data.get("project_id"),
+        project_id=project_id,
         status="new",
         reporter_id=reporter.id if reporter else None,
         position=_next_position(Requirement, "new"),
@@ -213,26 +215,21 @@ def patch_requirement(req_id):
     # 【Phase-3 §2.4】行级 RBAC：仅 reporter / 人类 assignee / pm / admin 可编辑。
     if not can_manage_ticket(current_user(), req):
         return forbidden({"reason": "cannot edit this requirement"})
-    data = request.get_json(silent=True) or {}
+    data = json_body()
     # 【Phase-3 §2.5】乐观并发守卫（缺省不校验）。
     conflict = check_concurrency(req, data)
     if conflict:
         return conflict
     changed = False
     if "title" in data:
-        title = (data.get("title") or "").strip()
-        if not title:
-            return jsonify({"error": "title cannot be empty"}), 400
-        req.title = title
+        # 非串 title → 400（此前 .strip() 500）；空串仍 400。
+        req.title = want_str(data, "title", required=True, max_len=200)
         changed = True
     if "description" in data:
         req.description = data["description"]
         changed = True
     if "priority" in data:
-        if data["priority"] not in PRIORITIES:
-            return jsonify({"error": "invalid priority",
-                            "detail": {"allowed": list(PRIORITIES)}}), 400
-        req.priority = data["priority"]
+        req.priority = want_str(data, "priority", required=True, choices=PRIORITIES)
         changed = True
     # §2.8-3：编辑也进时间线，让 feed 覆盖全生命周期。
     if changed:
@@ -271,7 +268,9 @@ def assign_requirement(req_id):
     req = db.session.get(Requirement, req_id)
     if req is None:
         return jsonify({"error": "requirement not found"}), 404
-    data = request.get_json(silent=True) or {}
+    # 【§2.2 / R4】仅体层加 json_body()（防非对象体 500）；assignee 保持既有
+    # _validate_assignee（已做类型+存在性校验、有意容忍数字串 "5"→5，不回退为 want_int）。
+    data = json_body()
     assignee_type = data.get("assignee_type")
     assignee_id = data.get("assignee_id")
 
@@ -307,9 +306,11 @@ def move_requirement(req_id):
     # 【Phase-3 §2.4】行级 RBAC：仅 can_manage_ticket 可移动。
     if not can_manage_ticket(current_user(), req):
         return forbidden({"reason": "cannot move this requirement"})
-    data = request.get_json(silent=True) or {}
-    to = data.get("status")
-    if not to or not workflow.is_valid_status("requirement", to):
+    data = json_body()
+    # 【§2.3-B1】status 必须先是字符串再进状态机：非空 list（{"status":["assigned"]}）此前
+    # 是真值 → `status in _table`（dict）对不可哈希类型触 unhashable 500。want_str 保证非串即 400。
+    to = want_str(data, "status", required=True)
+    if not workflow.is_valid_status("requirement", to):
         return jsonify({"error": "invalid target status",
                         "detail": {"allowed": workflow.column_keys("requirement")}}), 400
 
@@ -369,13 +370,10 @@ def convert_to_bug(req_id):
             "allowed": workflow.next_states("requirement", frm),
         }), 409
 
-    data = request.get_json(silent=True) or {}
-    title = (data.get("title") or f"[缺陷] {req.title}").strip()
-    severity = data.get("severity") or "major"
-    # 与 create_bug / patch_bug 一致：拒绝枚举外 severity，避免脏值落库、前端无徽章色。
-    if severity not in SEVERITIES:
-        return jsonify({"error": "invalid severity",
-                        "detail": {"allowed": list(SEVERITIES)}}), 400
+    # 【§2.2】非串 title → 400（此前 .strip() 500）；severity 走 choices 归一。
+    data = json_body()
+    title = want_str(data, "title") or f"[缺陷] {req.title}"
+    severity = want_str(data, "severity", default="major", choices=SEVERITIES) or "major"
 
     reporter = current_user()
     bug = Bug(

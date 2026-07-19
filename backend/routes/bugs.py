@@ -21,6 +21,8 @@ from services.auth_helpers import (
     require_role, current_user, can_manage_ticket, forbidden,
 )
 from services.pagination import paginate, with_total_count
+from services.search import escape_like
+from services.validation import json_body, want_str, want_int
 from routes.requirements import (
     _next_position, _validate_assignee, _validate_project, _actor,
     _coerce_index, _reindex_column, do_agent_advance, check_concurrency,
@@ -54,8 +56,10 @@ def list_bugs():
     if reporter_id is not None:
         q = q.filter_by(reporter_id=reporter_id)
     if keyword:
-        like = f"%{keyword}%"
-        q = q.filter(or_(Bug.title.ilike(like), Bug.description.ilike(like)))
+        # 【§2.4-C1】转义 LIKE 元字符（% _ \），与 search 一致，避免通配过度匹配。
+        like = f"%{escape_like(keyword)}%"
+        q = q.filter(or_(Bug.title.ilike(like, escape="\\"),
+                         Bug.description.ilike(like, escape="\\")))
     # 【Phase-2 §2.5-3】分页（非破坏）：裸数组 + X-Total-Count。
     q = q.order_by(Bug.position.asc(), Bug.id.asc())
     rows, total = paginate(q)
@@ -66,19 +70,18 @@ def list_bugs():
 @bp.post("")
 @require_role("admin", "pm")
 def create_bug():
-    data = request.get_json(silent=True) or {}
-    title = (data.get("title") or "").strip()
-    if not title:
-        return jsonify({"error": "title is required"}), 400
-    severity = data.get("severity") or "major"
-    if severity not in SEVERITIES:
-        return jsonify({"error": "invalid severity", "detail": {"allowed": list(SEVERITIES)}}), 400
+    # 【§2.2】非串 title → 400（此前 .strip() 500）；severity 走 choices 归一；
+    # project_id / related_requirement_id 走 want_int（list/dict 主键此前进 db.session.get 触 500）。
+    data = json_body()
+    title = want_str(data, "title", required=True, max_len=200)
+    severity = want_str(data, "severity", default="major", choices=SEVERITIES)
+    project_id = want_int(data, "project_id")
     # §2.8-1：project_id 存在性校验。
-    perr = _validate_project(data.get("project_id"))
+    perr = _validate_project(project_id)
     if perr:
         return perr
 
-    related = data.get("related_requirement_id")
+    related = want_int(data, "related_requirement_id")
     if related is not None and db.session.get(Requirement, related) is None:
         return jsonify({"error": "related requirement not found"}), 404
 
@@ -87,7 +90,7 @@ def create_bug():
         title=title,
         description=data.get("description"),
         severity=severity,
-        project_id=data.get("project_id"),
+        project_id=project_id,
         related_requirement_id=related,
         status="open",
         reporter_id=reporter.id if reporter else None,
@@ -119,26 +122,21 @@ def patch_bug(bug_id):
     # 【Phase-3 §2.4】行级 RBAC。
     if not can_manage_ticket(current_user(), bug):
         return forbidden({"reason": "cannot edit this bug"})
-    data = request.get_json(silent=True) or {}
+    data = json_body()
     # 【Phase-3 §2.5】乐观并发守卫（缺省不校验）。
     conflict = check_concurrency(bug, data)
     if conflict:
         return conflict
     changed = False
     if "title" in data:
-        title = (data.get("title") or "").strip()
-        if not title:
-            return jsonify({"error": "title cannot be empty"}), 400
-        bug.title = title
+        # 非串 title → 400（此前 .strip() 500）；空串仍 400。
+        bug.title = want_str(data, "title", required=True, max_len=200)
         changed = True
     if "description" in data:
         bug.description = data["description"]
         changed = True
     if "severity" in data:
-        if data["severity"] not in SEVERITIES:
-            return jsonify({"error": "invalid severity",
-                            "detail": {"allowed": list(SEVERITIES)}}), 400
-        bug.severity = data["severity"]
+        bug.severity = want_str(data, "severity", required=True, choices=SEVERITIES)
         changed = True
     # §2.8-3：编辑进时间线。
     if changed:
@@ -154,7 +152,8 @@ def assign_bug(bug_id):
     bug = db.session.get(Bug, bug_id)
     if bug is None:
         return jsonify({"error": "bug not found"}), 404
-    data = request.get_json(silent=True) or {}
+    # 【§2.2 / R4】仅体层加 json_body()；assignee 保持既有 _validate_assignee（容忍数字串）。
+    data = json_body()
     assignee_type = data.get("assignee_type")
     assignee_id = data.get("assignee_id")
 
@@ -189,9 +188,10 @@ def move_bug(bug_id):
     # 【Phase-3 §2.4】行级 RBAC。
     if not can_manage_ticket(current_user(), bug):
         return forbidden({"reason": "cannot move this bug"})
-    data = request.get_json(silent=True) or {}
-    to = data.get("status")
-    if not to or not workflow.is_valid_status("bug", to):
+    data = json_body()
+    # 【§2.3-B1】status 必须先是字符串再进状态机（非空 list → unhashable 500）。
+    to = want_str(data, "status", required=True)
+    if not workflow.is_valid_status("bug", to):
         return jsonify({"error": "invalid target status",
                         "detail": {"allowed": workflow.column_keys("bug")}}), 400
 

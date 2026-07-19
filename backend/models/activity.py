@@ -54,6 +54,10 @@ class Activity(db.Model):
         actor_type, actor_id = ("system", None)
         if actor:
             actor_type, actor_id = actor
+        # 【§2.4-C3】截断到列宽 VARCHAR(255)（含工单标题的审计文案在 Postgres/MySQL 会溢出报错）。
+        # 保 None：该列 nullable，合法的 message=None 不得被强转为 ""（改变时间线语义）。
+        if isinstance(message, str):
+            message = message[:255]
         act = Activity(
             entity_type=entity_type,
             entity_id=entity_id,

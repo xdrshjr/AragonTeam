@@ -17,9 +17,12 @@ const PALETTE = ["#C15F3C", "#3B6EA5", "#6E8B3D", "#8A5A9B", "#C99A2E", "#4B8B8B
 export default function ProfileCard() {
   const { user, applyUser } = useAuth();
   const toast = useToast();
+  // 【§2.7-C5】记录初始展示色（avatar_color 为 null 时回落 PALETTE[0] 仅用于高亮，
+  // 但以此为 diff 基准，避免「无任何操作直接保存」也把默认色写入 avatar_color）。
+  const initialColor = user?.avatar_color ?? PALETTE[0];
   const [displayName, setDisplayName] = useState(user?.display_name ?? "");
   const [email, setEmail] = useState(user?.email ?? "");
-  const [color, setColor] = useState(user?.avatar_color ?? PALETTE[0]);
+  const [color, setColor] = useState(initialColor);
   const [saving, setSaving] = useState(false);
 
   if (!user) return null;
@@ -28,7 +31,8 @@ export default function ProfileCard() {
     const diff: ProfileUpdate = {};
     if (displayName.trim() !== (user!.display_name ?? "")) diff.display_name = displayName.trim();
     if (email.trim() !== (user!.email ?? "")) diff.email = email.trim();
-    if (color !== (user!.avatar_color ?? "")) diff.avatar_color = color;
+    // 仅当用户实际改变了展示色时才纳入（与初始展示色比较，而非空串）。
+    if (color !== initialColor) diff.avatar_color = color;
     return diff;
   }
 

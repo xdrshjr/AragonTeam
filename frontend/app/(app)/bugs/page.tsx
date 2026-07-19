@@ -15,6 +15,7 @@ import Modal from "@/components/ui/Modal";
 import { AssigneeAvatar } from "@/components/ui/Avatar";
 import { SkeletonRows } from "@/components/ui/Skeleton";
 import EmptyState from "@/components/ui/EmptyState";
+import ErrorState from "@/components/ui/ErrorState";
 import BugForm from "@/components/bugs/BugForm";
 import AssigneePicker, { AssigneeValue } from "@/components/AssigneePicker";
 import TicketDrawer from "@/components/TicketDrawer";
@@ -67,7 +68,7 @@ export default function BugsPage() {
     params.set("assignee_id", String(assignee.assignee_id));
   }
   const listKey = `/bugs${params.toString() ? `?${params.toString()}` : ""}`;
-  const { data, mutate } = useSWR(listKey, listFetcher<Bug>);
+  const { data, error, mutate } = useSWR(listKey, listFetcher<Bug>);
   const bugs = data?.items;
 
   const [creating, setCreating] = useState(false);
@@ -132,7 +133,9 @@ export default function BugsPage() {
         />
 
         <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-card">
-          {!bugs ? (
+          {error && !bugs ? (
+            <ErrorState message="无法加载 BUG 列表" onRetry={() => mutate()} />
+          ) : !bugs ? (
             <SkeletonRows rows={6} />
           ) : bugs.length === 0 ? (
             <EmptyState

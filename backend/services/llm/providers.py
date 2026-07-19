@@ -54,7 +54,7 @@ def _post_json(url: str, headers: dict, payload: dict, timeout: int) -> dict:
     req = urllib.request.Request(url, data=body, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8")
+            raw = resp.read()
     except urllib.error.HTTPError as exc:
         kind = "http_4xx" if 400 <= exc.code < 500 else "http_5xx"
         raise LLMError(kind, f"HTTP {exc.code}") from exc
@@ -65,10 +65,12 @@ def _post_json(url: str, headers: dict, payload: dict, timeout: int) -> dict:
         if isinstance(exc.reason, socket.timeout):
             raise LLMError("timeout", f"request timed out after {timeout}s") from exc
         raise LLMError("network", f"network error: {exc.reason}") from exc
+    # 【§2.4-C4】decode/parse 纳入同一归一：非 UTF-8 上游响应体（UnicodeDecodeError）
+    # 与非法 JSON 一律归一为 LLMError(parse)，守住「仅 LLMError 逃逸」契约。
     try:
-        return json.loads(raw)
-    except (ValueError, TypeError) as exc:
-        raise LLMError("parse", "response body is not valid JSON") from exc
+        return json.loads(raw.decode("utf-8"))
+    except (ValueError, TypeError, UnicodeDecodeError) as exc:
+        raise LLMError("parse", "response body is not valid UTF-8 JSON") from exc
 
 
 class AnthropicProvider:

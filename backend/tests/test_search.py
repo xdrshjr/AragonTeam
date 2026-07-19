@@ -76,3 +76,21 @@ def test_me_work_reported_side(client, auth, make_requirement, data):
     res = client.get("/api/me/work", headers=auth("pm"))
     body = res.get_json()
     assert len(body["reported"]["requirements"]) >= 1
+
+
+def test_list_filter_escapes_like_metachars(client, auth):
+    """【§2.4-C1】列表 q= 转义 LIKE 元字符：q=% 只匹配字面量含 % 的单，不过度匹配全部。"""
+    client.post("/api/requirements", json={"title": "a%b"}, headers=auth("pm"))
+    client.post("/api/requirements", json={"title": "axb"}, headers=auth("pm"))
+    r = client.get("/api/requirements", query_string={"q": "%"}, headers=auth("pm"))
+    # 转义生效则仅 1 条（"a%b"）；若未转义，% 作通配会命中全部 2 条。
+    assert r.headers["X-Total-Count"] == "1"
+    assert r.get_json()[0]["title"] == "a%b"
+
+
+def test_list_filter_escapes_underscore(client, auth):
+    """q=_ 作字面量：只匹配含下划线的单，不匹配任意单字符。"""
+    client.post("/api/requirements", json={"title": "a_b"}, headers=auth("pm"))
+    client.post("/api/requirements", json={"title": "aXb"}, headers=auth("pm"))
+    r = client.get("/api/requirements", query_string={"q": "_"}, headers=auth("pm"))
+    assert r.headers["X-Total-Count"] == "1"

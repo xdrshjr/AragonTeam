@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ApiError } from "@/lib/api";
 import { useToast } from "@/lib/toast";
+import { useAuth } from "@/lib/auth";
 import { useTicket } from "@/hooks/useTicket";
 import type { Requirement, Bug, Priority, Severity } from "@/lib/types";
 import { statusStyle, PRIORITY_STYLES, SEVERITY_STYLES } from "@/lib/constants";
@@ -47,6 +48,7 @@ function shortTime(iso?: string | null): string {
 export default function TicketDrawer({ entity, id, onClose, onChanged }: Props) {
   const router = useRouter();
   const toast = useToast();
+  const { user } = useAuth();
   const isBug = entity === "bugs";
   const {
     ticket, feed, isLoading,
@@ -122,8 +124,18 @@ export default function TicketDrawer({ entity, id, onClose, onChanged }: Props) 
     assignee_id: ticket?.assignee_id ?? null,
   };
 
-  const canAdvance = ticket?.assignee_type === "agent";
+  // 【§2.7-C1】写操作门禁：后端仍是权威，前端仅收敛「可见即可用」，判据与后端
+  // can_manage_ticket（reporter / 人类 assignee / pm / admin）逐字对齐，避免无权成员点出 403。
+  const canAssign = user?.role === "admin" || user?.role === "pm";
+  const canManage =
+    canAssign ||
+    (!!ticket && !!user &&
+      (ticket.reporter_id === user.id ||
+        (ticket.assignee_type === "user" && ticket.assignee_id === user.id)));
+
+  const canAdvance = ticket?.assignee_type === "agent" && canManage;
   const canConvert =
+    canAssign && // 转 BUG 后端限 pm/admin
     !isBug &&
     ((ticket as Requirement | undefined)?.status === "testing" ||
       (ticket as Requirement | undefined)?.status === "reviewing");
@@ -203,7 +215,16 @@ export default function TicketDrawer({ entity, id, onClose, onChanged }: Props) 
       toast.success(`已转为 BUG-${bug?.id}`);
       onChanged?.();
       onClose();
-      router.push("/bugs/board");
+      // 【§2.7-C2】直达新 BUG 卡：带 ?ticket= 并派发 open-ticket 事件（看板据此自动打开抽屉），
+      // 避免落到空看板；无 id 时兜底回看板首页。
+      if (bug?.id != null) {
+        router.push(`/bugs/board?ticket=${bug.id}`);
+        window.dispatchEvent(
+          new CustomEvent("aragon:open-ticket", { detail: { entity: "bugs", id: bug.id } })
+        );
+      } else {
+        router.push("/bugs/board");
+      }
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "转 BUG 失败");
     }
@@ -281,7 +302,8 @@ export default function TicketDrawer({ entity, id, onClose, onChanged }: Props) 
                   <input
                     value={titleInput}
                     onChange={(e) => setTitleInput(e.target.value)}
-                    className="h-10 rounded-lg border border-border bg-surface px-3 text-sm text-ink focus:border-clay focus:outline-none focus:ring-2 focus:ring-clay/20"
+                    readOnly={!canManage}
+                    className="h-10 rounded-lg border border-border bg-surface px-3 text-sm text-ink read-only:opacity-70 focus:border-clay focus:outline-none focus:ring-2 focus:ring-clay/20"
                   />
                 </div>
                 <div className="flex flex-col gap-1.5">
@@ -290,7 +312,8 @@ export default function TicketDrawer({ entity, id, onClose, onChanged }: Props) 
                     value={descInput}
                     onChange={(e) => setDescInput(e.target.value)}
                     rows={3}
-                    className="resize-y rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink focus:border-clay focus:outline-none focus:ring-2 focus:ring-clay/20"
+                    readOnly={!canManage}
+                    className="resize-y rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink read-only:opacity-70 focus:border-clay focus:outline-none focus:ring-2 focus:ring-clay/20"
                   />
                 </div>
                 <div className="flex items-center justify-between">
@@ -301,19 +324,24 @@ export default function TicketDrawer({ entity, id, onClose, onChanged }: Props) 
                     <select
                       value={levelValue}
                       onChange={(e) => onLevelChange(e.target.value)}
-                      className="h-9 rounded-lg border border-border bg-surface px-2 text-sm text-ink focus:border-clay focus:outline-none focus:ring-2 focus:ring-clay/20"
+                      disabled={!canManage}
+                      className="h-9 rounded-lg border border-border bg-surface px-2 text-sm text-ink disabled:opacity-60 focus:border-clay focus:outline-none focus:ring-2 focus:ring-clay/20"
                     >
                       {levelOptions.map((o) => (
                         <option key={o.value} value={o.value}>{o.label}</option>
                       ))}
                     </select>
                   </div>
-                  <Button size="sm" variant="ghost" onClick={onSaveDetails} disabled={savingDetails}>
-                    {savingDetails ? "保存中…" : "保存标题/描述"}
-                  </Button>
+                  {/* 【§2.7-C1】仅 canManage 显示保存按钮，避免无权成员点击必得 403。 */}
+                  {canManage && (
+                    <Button size="sm" variant="ghost" onClick={onSaveDetails} disabled={savingDetails}>
+                      {savingDetails ? "保存中…" : "保存标题/描述"}
+                    </Button>
+                  )}
                 </div>
 
-                <AssigneePicker value={assigneeValue} onChange={onAssignChange} />
+                {/* 【§2.7-C1】改派仅 pm/admin 可见（后端 assign 限 pm/admin）。 */}
+                {canAssign && <AssigneePicker value={assigneeValue} onChange={onAssignChange} />}
 
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-muted">
                   <span className="inline-flex items-center gap-1">

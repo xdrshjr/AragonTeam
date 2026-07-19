@@ -1,10 +1,11 @@
 """项目路由（§4.2）。list / create(admin|pm) / get。"""
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, jsonify
 from flask_jwt_extended import jwt_required
 
 from extensions import db
 from models.project import Project
 from services.auth_helpers import require_role, current_user
+from services.validation import json_body, want_str
 
 bp = Blueprint("projects", __name__, url_prefix="/api/projects")
 
@@ -19,9 +20,10 @@ def list_projects():
 @bp.post("")
 @require_role("admin", "pm")
 def create_project():
-    data = request.get_json(silent=True) or {}
-    name = (data.get("name") or "").strip()
-    key = (data.get("key") or "").strip().upper()
+    # 【§2.2】非串 name/key → 400（此前 .strip() 500）。
+    data = json_body()
+    name = want_str(data, "name")
+    key = want_str(data, "key").upper()
     description = data.get("description")
 
     if not name or not key:

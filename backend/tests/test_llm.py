@@ -128,6 +128,28 @@ def test_network_error_raises_llmerror(monkeypatch):
     assert ei.value.kind == "network"
 
 
+class _NonUtf8Resp:
+    """模拟上游返回非 UTF-8 字节的响应体（§2.4-C4）。"""
+
+    def read(self):
+        return b"\xff\xfe\x00\x01not utf-8"
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def test_non_utf8_response_raises_parse_llmerror(monkeypatch):
+    """【§2.4-C4】非 UTF-8 响应体此前抛裸 UnicodeDecodeError——现归一为 LLMError(parse)，
+    守住「仅 LLMError 逃逸」契约（上层 generate_work 据此优雅降级，不 5xx）。"""
+    _patch_urlopen(monkeypatch, lambda req, timeout=None: _NonUtf8Resp())
+    with pytest.raises(LLMError) as ei:
+        _post_json("https://api.anthropic.com/v1/messages", {}, {"a": 1}, 30)
+    assert ei.value.kind == "parse"
+
+
 # —————————————————— 12. 重试后成功 ——————————————————
 
 def test_retry_then_success(monkeypatch):

@@ -41,8 +41,12 @@ export default function RequirementsBoardPage() {
       const bug = await api.post<Bug>(`/requirements/${req.id}/convert-to-bug`, {});
       toast.success(`已转为 BUG-${bug.id}`);
       mutate();
-      // 跳转到 BUG 看板并高亮新卡片（U6）。
-      router.push(`/bugs/board?highlight=${bug.id}`);
+      // 【§2.7-C2】直达新 BUG 卡：看板只监听 ?ticket= 与 aragon:open-ticket 事件；
+      // 此前用死参 ?highlight= 会落到空看板、不自动打开抽屉。
+      router.push(`/bugs/board?ticket=${bug.id}`);
+      window.dispatchEvent(
+        new CustomEvent("aragon:open-ticket", { detail: { entity: "bugs", id: bug.id } })
+      );
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "转 BUG 失败");
     } finally {

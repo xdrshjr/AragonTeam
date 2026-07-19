@@ -15,6 +15,7 @@ import Modal from "@/components/ui/Modal";
 import { AssigneeAvatar } from "@/components/ui/Avatar";
 import { SkeletonRows } from "@/components/ui/Skeleton";
 import EmptyState from "@/components/ui/EmptyState";
+import ErrorState from "@/components/ui/ErrorState";
 import RequirementForm from "@/components/requirements/RequirementForm";
 import AssigneePicker, { AssigneeValue } from "@/components/AssigneePicker";
 import TicketDrawer from "@/components/TicketDrawer";
@@ -67,7 +68,7 @@ export default function RequirementsPage() {
     params.set("assignee_id", String(assignee.assignee_id));
   }
   const listKey = `/requirements${params.toString() ? `?${params.toString()}` : ""}`;
-  const { data, mutate } = useSWR(listKey, listFetcher<Requirement>);
+  const { data, error, mutate } = useSWR(listKey, listFetcher<Requirement>);
   const reqs = data?.items;
 
   const [creating, setCreating] = useState(false);
@@ -132,7 +133,9 @@ export default function RequirementsPage() {
         />
 
         <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-card">
-          {!reqs ? (
+          {error && !reqs ? (
+            <ErrorState message="无法加载需求列表" onRetry={() => mutate()} />
+          ) : !reqs ? (
             <SkeletonRows rows={6} />
           ) : reqs.length === 0 ? (
             <EmptyState

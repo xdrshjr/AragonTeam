@@ -58,3 +58,11 @@ def test_login_success_clears_counter(client):
     # 清零后再失败一次不应立即 429。
     again = client.post("/api/auth/login", json={"username": "pm", "password": "bad"})
     assert again.status_code == 401
+
+
+def test_invalid_token_returns_401(client):
+    # 【§2.4-C2】伪造 / 篡改 token → 401（此前 422 会让前端不跳登录、会话卡死）。
+    r = client.get("/api/auth/me", headers={"Authorization": "Bearer forged.invalid.token"})
+    assert r.status_code == 401
+    assert r.status_code != 422
+    assert r.get_json()["error"]

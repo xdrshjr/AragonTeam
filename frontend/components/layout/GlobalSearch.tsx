@@ -113,7 +113,14 @@ export default function GlobalSearch() {
       setActive((i) => Math.max(i - 1, -1));
     } else if (e.key === "Enter") {
       if (active >= 0 && active < flat.length) onSelect(flat[active]);
-      else if (debounced) onSeeAll("requirements");
+      else if (debounced) {
+        // 【§2.7-C3】无高亮行时跳到「真有命中」的分组：仅 BUG 有命中则去 bugs，
+        // 否则默认 requirements（避免命中 BUG 却跳到空的需求列表）。
+        const counts = data?.counts;
+        const target: Kind =
+          counts && counts.bugs > 0 && counts.requirements === 0 ? "bugs" : "requirements";
+        onSeeAll(target);
+      }
     } else if (e.key === "Escape") {
       if (open) setOpen(false);
       else {

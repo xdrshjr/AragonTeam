@@ -130,3 +130,15 @@ def test_autorun_never_bypasses_workflow(client, auth, make_requirement, data):
                       json={}, headers=auth("pm"))
     for a in res.get_json()["advanced"]:
         assert workflow.can_transition(a["entity"], a["from"], a["to"]), a
+
+
+def test_patch_agent_cannot_set_busy(client, auth, data):
+    """【§2.3-B3】busy 是 autopilot 运行期软锁；手动置 busy 会让 /autorun /tick 恒 409
+    且无自动恢复，Agent 永久卡死。故 PATCH status=busy → 400；idle/offline → 200。"""
+    bad = client.patch(f"/api/agents/{data['dev_agent_id']}", json={"status": "busy"},
+                       headers=auth("pm"))
+    assert bad.status_code == 400
+    ok = client.patch(f"/api/agents/{data['dev_agent_id']}", json={"status": "idle"},
+                      headers=auth("pm"))
+    assert ok.status_code == 200
+    assert ok.get_json()["status"] == "idle"

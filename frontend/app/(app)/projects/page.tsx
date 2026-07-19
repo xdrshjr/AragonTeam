@@ -12,11 +12,12 @@ import Header from "@/components/layout/Header";
 import Button from "@/components/ui/Button";
 import { SkeletonRows } from "@/components/ui/Skeleton";
 import EmptyState from "@/components/ui/EmptyState";
+import ErrorState from "@/components/ui/ErrorState";
 import ProjectFormModal from "@/components/admin/ProjectFormModal";
 
 export default function ProjectsPage() {
   const { user } = useAuth();
-  const { data: projects, mutate } = useSWR<Project[]>("/projects", swrFetcher);
+  const { data: projects, error, mutate } = useSWR<Project[]>("/projects", swrFetcher);
   const { data: users } = useSWR<User[]>("/users", swrFetcher);
   const canCreate = user?.role === "admin" || user?.role === "pm";
   const [creating, setCreating] = useState(false);
@@ -42,7 +43,9 @@ export default function ProjectsPage() {
       />
       <main className="flex-1 overflow-y-auto p-6">
         <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-card">
-          {!projects ? (
+          {error && !projects ? (
+            <ErrorState message="无法加载项目列表" onRetry={() => mutate()} />
+          ) : !projects ? (
             <SkeletonRows rows={4} />
           ) : projects.length === 0 ? (
             <EmptyState

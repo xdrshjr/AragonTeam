@@ -109,3 +109,12 @@ def test_same_column_reorder_by_position(client, auth):
     # 该列按 position 排序，被移动的卡应排在最前。
     new_col = client.get("/api/requirements?status=new", headers=auth("pm")).get_json()
     assert new_col[0]["id"] == ids[2]
+
+
+def test_move_non_string_status_returns_400_not_500(client, auth, make_requirement, data):
+    """【§2.3-B1】非串 status（list）此前 `status in _table`(dict) 触 unhashable 500——现 400。"""
+    req = make_requirement(assignee=("user", data["member_id"]))
+    r = client.patch(f"/api/requirements/{req['id']}/move",
+                     json={"status": ["assigned"]}, headers=auth("pm"))
+    assert r.status_code == 400
+    assert r.status_code != 500

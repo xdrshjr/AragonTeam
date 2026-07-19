@@ -3,7 +3,7 @@
 import { useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import Link from "next/link";
-import { api, swrFetcher, ApiError } from "@/lib/api";
+import { api, swrFetcher, listFetcher, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/lib/toast";
 import type {
@@ -20,6 +20,7 @@ import { AGENT_KIND_LABELS, AGENT_STATUS_LABELS, actionLabel, autopilotSummary }
 import Header from "@/components/layout/Header";
 import Button from "@/components/ui/Button";
 import Avatar from "@/components/ui/Avatar";
+import ErrorState from "@/components/ui/ErrorState";
 import AgentFormModal, { AgentFormState } from "@/components/admin/AgentFormModal";
 
 const STATUS_DOT: Record<string, string> = {
@@ -32,9 +33,17 @@ export default function AgentsPage() {
   const { user } = useAuth();
   const toast = useToast();
   const { mutate } = useSWRConfig();
-  const { data: agents } = useSWR<Agent[]>("/agents", swrFetcher);
-  const { data: reqs } = useSWR<Requirement[]>("/requirements", swrFetcher);
-  const { data: bugs } = useSWR<Bug[]>("/bugs", swrFetcher);
+  const { data: agents, error: agentsError } = useSWR<Agent[]>("/agents", swrFetcher);
+  // 【§2.5-A1】不变量：一个 SWR key 只对应一种 fetcher 形状。此处**绝不**复用列表页的
+  // "/requirements"/"/bugs" 裸 key（listFetcher 回 {items,total} 对象），否则 Agents 页拿到
+  // 对象、workload() 对其 .filter 崩溃。改用带 assignee_type=agent 的专用 key + listFetcher，
+  // 并以 limit=200（= 后端 MAX_LIMIT）缓解负载被默认 50 截断。
+  const { data: reqData } = useSWR(
+    "/requirements?assignee_type=agent&limit=200", listFetcher<Requirement>);
+  const { data: bugData } = useSWR(
+    "/bugs?assignee_type=agent&limit=200", listFetcher<Bug>);
+  const reqs = reqData?.items ?? [];
+  const bugs = bugData?.items ?? [];
   const { data: stats } = useSWR<Stats>("/stats", swrFetcher);
 
   // 只有 pm/admin 能触发自主编排（后端仍是权威）。
@@ -45,9 +54,13 @@ export default function AgentsPage() {
   const [form, setForm] = useState<AgentFormState | null>(null);
 
   // 自主运行后刷新看板 / 列表 / Agent / 仪表盘 / 未读数。
+  // 【§2.5-A1】负载用的 key 已换成带过滤的专用 key，mutate 必须同步，否则运行后负载不刷新。
   function revalidateAll() {
     for (const k of [
-      "/agents", "/requirements", "/bugs", "/stats",
+      "/agents",
+      "/requirements?assignee_type=agent&limit=200",
+      "/bugs?assignee_type=agent&limit=200",
+      "/stats",
       "/board/requirements", "/board/bugs",
       "/notifications/unread-count",
     ]) {
@@ -56,10 +69,10 @@ export default function AgentsPage() {
   }
 
   function workload(agentId: number) {
-    const r = (reqs ?? []).filter(
+    const r = reqs.filter(
       (x) => x.assignee_type === "agent" && x.assignee_id === agentId
     ).length;
-    const b = (bugs ?? []).filter(
+    const b = bugs.filter(
       (x) => x.assignee_type === "agent" && x.assignee_id === agentId
     ).length;
     return { r, b, total: r + b };
@@ -155,6 +168,9 @@ export default function AgentsPage() {
         }
       />
       <main className="flex-1 overflow-y-auto p-6">
+        {agentsError && !agents ? (
+          <ErrorState message="无法加载 Agent 列表" onRetry={() => mutate("/agents")} />
+        ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
           {agents?.map((a) => {
             const load = workload(a.id);
@@ -241,6 +257,7 @@ export default function AgentsPage() {
             </div>
           )}
         </div>
+        )}
       </main>
 
       <AgentFormModal

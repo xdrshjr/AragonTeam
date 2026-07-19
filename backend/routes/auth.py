@@ -6,15 +6,18 @@ from extensions import db
 from models.user import User, ROLES
 from services.auth_helpers import current_user, require_role
 from services import ratelimit
+from services.validation import json_body, want_str
 
 bp = Blueprint("auth", __name__, url_prefix="/api/auth")
 
 
 @bp.post("/login")
 def login():
-    data = request.get_json(silent=True) or {}
-    username = (data.get("username") or "").strip()
-    password = data.get("password") or ""
+    # 【§2.2】json_body()/want_str 堵可复现 500：非对象体（5/[1]/"x"）→ 400（公开接口）；
+    # 非串 username（123）→ 400（此前 .strip() 500）。password 不 strip（保留原字符）。
+    data = json_body()
+    username = want_str(data, "username")
+    password = want_str(data, "password", strip=False)
     if not username or not password:
         return jsonify({"error": "username and password are required"}), 400
 
@@ -51,17 +54,16 @@ def me():
 @bp.post("/register")
 @require_role("admin")
 def register():
-    data = request.get_json(silent=True) or {}
-    username = (data.get("username") or "").strip()
-    password = data.get("password") or ""
-    role = data.get("role") or "member"
-    display_name = data.get("display_name") or username
+    # 【§2.2】非串 username/display_name → 400（此前 .strip() 500）；role 走 choices 归一。
+    data = json_body()
+    username = want_str(data, "username")
+    password = want_str(data, "password", strip=False)
+    role = want_str(data, "role", default="member", choices=ROLES)
+    display_name = want_str(data, "display_name") or username
     email = data.get("email")
 
     if not username or not password:
         return jsonify({"error": "username and password are required"}), 400
-    if role not in ROLES:
-        return jsonify({"error": "invalid role", "detail": {"allowed": list(ROLES)}}), 400
     if User.query.filter_by(username=username).first():
         return jsonify({"error": "username already exists"}), 409
 

@@ -9,6 +9,7 @@ import { notificationIcon, notificationLabel } from "@/lib/constants";
 import Header from "@/components/layout/Header";
 import Button from "@/components/ui/Button";
 import EmptyState from "@/components/ui/EmptyState";
+import ErrorState from "@/components/ui/ErrorState";
 import { SkeletonRows } from "@/components/ui/Skeleton";
 import { AuthorAvatar } from "@/components/ui/Avatar";
 
@@ -23,7 +24,7 @@ function shortTime(iso: string): string {
 export default function NotificationsPage() {
   const router = useRouter();
   const toast = useToast();
-  const { data, mutate } = useSWR("/notifications?limit=100", listFetcher<Notification>);
+  const { data, error, mutate } = useSWR("/notifications?limit=100", listFetcher<Notification>);
   const items = data?.items;
 
   async function openItem(n: Notification) {
@@ -69,7 +70,9 @@ export default function NotificationsPage() {
       />
       <main className="flex-1 overflow-y-auto p-6">
         <div className="mx-auto max-w-2xl overflow-hidden rounded-xl border border-border bg-surface shadow-card">
-          {!items ? (
+          {error && !items ? (
+            <ErrorState message="无法加载通知" onRetry={() => mutate()} />
+          ) : !items ? (
             <SkeletonRows rows={6} />
           ) : items.length === 0 ? (
             <EmptyState title="暂无通知" hint="被指派、被评论、被提及或工单被推进时，都会出现在这里。" />

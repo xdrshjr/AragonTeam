@@ -8,6 +8,7 @@ import { statusStyle, PRIORITY_STYLES, SEVERITY_STYLES } from "@/lib/constants";
 import Header from "@/components/layout/Header";
 import Badge from "@/components/ui/Badge";
 import EmptyState from "@/components/ui/EmptyState";
+import ErrorState from "@/components/ui/ErrorState";
 import { SkeletonRows } from "@/components/ui/Skeleton";
 import TicketDrawer from "@/components/TicketDrawer";
 
@@ -90,14 +91,16 @@ function Section({
 }
 
 export default function MyWorkPage() {
-  const { data, mutate } = useSWR<MeWork>("/me/work", swrFetcher);
+  const { data, error, mutate } = useSWR<MeWork>("/me/work", swrFetcher);
   const [open, setOpen] = useState<OpenTarget>(null);
 
   return (
     <>
       <Header title="我的工作" subtitle="指派给我 / 我提交的单，一处聚合" />
       <main className="flex-1 overflow-y-auto p-6">
-        {!data ? (
+        {error && !data ? (
+          <ErrorState message="无法加载我的工作" onRetry={() => mutate()} />
+        ) : !data ? (
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <div className="rounded-xl border border-border bg-surface shadow-card">
               <SkeletonRows rows={4} />

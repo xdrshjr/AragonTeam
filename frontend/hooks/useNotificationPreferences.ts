@@ -32,9 +32,12 @@ export function useNotificationPreferences() {
         api.patch<PrefsEnvelope>("/me/notification-preferences", {
           preferences: { [type]: next },
         });
+      // 【§2.7-C6】throwOnError:true —— 失败时 rollbackOnError 回滚乐观态后**向上抛出**，
+      // 让卡片的 try/catch 触发 toast（此前不抛，失败静默回滚、零反馈）。
       await mutate(patchThunk, {
         optimisticData: optimistic,
         rollbackOnError: true,
+        throwOnError: true,
         revalidate: false,
       });
     },
