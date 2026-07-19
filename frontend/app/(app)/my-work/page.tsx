@@ -3,6 +3,7 @@
 import { useState } from "react";
 import useSWR from "swr";
 import { swrFetcher } from "@/lib/api";
+import { useProjectScope } from "@/lib/project-scope";
 import type { MeWork, Requirement, Bug } from "@/lib/types";
 import { statusStyle, PRIORITY_STYLES, SEVERITY_STYLES } from "@/lib/constants";
 import Header from "@/components/layout/Header";
@@ -92,11 +93,17 @@ function Section({
 
 export default function MyWorkPage() {
   const { data, error, mutate } = useSWR<MeWork>("/me/work", swrFetcher);
+  const { scopeLabel } = useProjectScope();
   const [open, setOpen] = useState<OpenTarget>(null);
 
   return (
     <>
-      <Header title="我的工作" subtitle="指派给我 / 我提交的单，一处聚合" />
+      {/* 【§2.4⑦'】「我的工作」的语义是「与我相关的一切」，**有意不受项目切换器约束**——显式标注。
+          只在选了具体项目时标注：全部项目下没有可误解的对象（验收 C8）。 */}
+      <Header
+        title="我的工作"
+        subtitle={`指派给我 / 我提交的单，一处聚合${scopeLabel ? " · 不随项目筛选" : ""}`}
+      />
       <main className="flex-1 overflow-y-auto p-6">
         {error && !data ? (
           <ErrorState message="无法加载我的工作" onRetry={() => mutate()} />

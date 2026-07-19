@@ -7,12 +7,29 @@ SEED_ON_STARTUP 决定是否幂等 seed。__main__ 起 5000 端口。
 from flask import Flask, jsonify
 from flask_cors import CORS
 from sqlalchemy import text
+from werkzeug.routing import IntegerConverter
 
 from config import Config
 from extensions import db, jwt
 from errors import register_error_handlers
 from observability import init_observability
 from services import llm
+
+
+# SQLite / 多数 RDBMS 的 INTEGER 上限（64 位有符号）。超出即不可能命中任何主键。
+MAX_DB_INT = 2 ** 63 - 1
+
+
+class BoundedIntConverter(IntegerConverter):
+    """给 `<int:…>` 加 64 位上界：超界值不匹配路由 → 404，
+    而非进 db.session.get 触 OverflowError → 500（scale-and-project-scope §2.6①-A）。
+
+    仅通过构造参数固定 max，无需覆写任何方法——越界判定由父类 NumberConverter 完成。
+    """
+
+    def __init__(self, url_map, *args, **kwargs):
+        kwargs.setdefault("max", MAX_DB_INT)
+        super().__init__(url_map, *args, **kwargs)
 
 
 def create_app(config_class=Config):
@@ -35,6 +52,9 @@ def create_app(config_class=Config):
 
     # —— 全局错误处理器 + JWT loaders（§2.6 / R-03）——
     register_error_handlers(app, jwt)
+
+    # 【§2.6①-A】覆盖全局 int 转换器，必须在注册蓝图**之前**——已编译的规则不会采用新转换器。
+    app.url_map.converters["int"] = BoundedIntConverter
 
     # —— 蓝图 ——
     from routes import register_blueprints

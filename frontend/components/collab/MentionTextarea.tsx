@@ -3,7 +3,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, KeyboardEvent } from "react";
 import useSWR from "swr";
-import { swrFetcher } from "@/lib/api";
+import { USERS_KEY, swrFetcher } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import type { User } from "@/lib/types";
 import { activeMention, applyMention } from "@/lib/mentions";
@@ -38,7 +38,7 @@ export default function MentionTextarea({
   id,
   "aria-label": ariaLabel,
 }: MentionTextareaProps) {
-  const { data: users } = useSWR<User[]>("/users", swrFetcher); // 与 AssigneePicker 同 key，去重
+  const { data: users } = useSWR<User[]>(USERS_KEY, swrFetcher); // 与 AssigneePicker 同 key，去重
   const { user: me } = useAuth();
 
   const [open, setOpen] = useState(false);

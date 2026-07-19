@@ -17,8 +17,11 @@ type Ticket = Requirement | Bug;
 // 工单详情抽屉的数据与写操作（§2.4）：拉 ticket + feed，
 // 封装评论 / agent-advance / 指派 / 编辑 / 转 BUG，并在成功后 mutate 这两个 key。
 export function useTicket(entity: Entity, id: number | null) {
-  const ticketKey = id ? `/${entity}/${id}` : null;
-  const feedKey = id ? `/${entity}/${id}/feed` : null;
+  // 【H1】id 守卫与 TicketDrawer 统一为「正整数才有效」：此前 hook 判 falsy、抽屉判 `id == null`，
+  // 二者不一致 → `?ticket=0` 会让抽屉铺开全屏遮罩却永远停在骨架态（key 为 null，永不返回数据）。
+  const isValidId = id !== null && Number.isInteger(id) && id > 0;
+  const ticketKey = isValidId ? `/${entity}/${id}` : null;
+  const feedKey = isValidId ? `/${entity}/${id}/feed` : null;
 
   const {
     data: ticket,

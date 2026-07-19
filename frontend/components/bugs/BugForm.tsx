@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import { useToast } from "@/lib/toast";
+import { useProjectScope } from "@/lib/project-scope";
 import type { Bug, Severity } from "@/lib/types";
 import { SEVERITY_STYLES } from "@/lib/constants";
 import Button from "@/components/ui/Button";
@@ -24,9 +25,12 @@ const SEVERITY_OPTIONS = (Object.keys(SEVERITY_STYLES) as Severity[]).map((k) =>
 // 新建 BUG 表单。
 export default function BugForm({ onCreated, onCancel }: Props) {
   const toast = useToast();
+  const { scope, projects } = useProjectScope();
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [severity, setSeverity] = useState<Severity>("major");
+  // 【§2.4⑧-3】默认继承当前作用域（全部 / 未归属时默认不归属，与今天一致）。
+  const [projectId, setProjectId] = useState(typeof scope === "number" ? String(scope) : "");
   const [assignee, setAssignee] = useState<AssigneeValue>({
     assignee_type: null,
     assignee_id: null,
@@ -48,6 +52,8 @@ export default function BugForm({ onCreated, onCancel }: Props) {
         title: title.trim(),
         description: description.trim() || undefined,
         severity,
+        // undefined 经 JSON.stringify 自动省略 → 后端 want_int 得 None，语义与今天一致。
+        project_id: projectId ? Number(projectId) : undefined,
       });
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "创建失败");
@@ -94,8 +100,18 @@ export default function BugForm({ onCreated, onCancel }: Props) {
           onChange={(e) => setSeverity(e.target.value as Severity)}
           options={SEVERITY_OPTIONS}
         />
-        <AssigneePicker value={assignee} onChange={setAssignee} />
+        <Select
+          label="项目"
+          name="project_id"
+          value={projectId}
+          onChange={(e) => setProjectId(e.target.value)}
+          options={[
+            { value: "", label: "不归属项目" },
+            ...(projects ?? []).map((p) => ({ value: String(p.id), label: `${p.key} · ${p.name}` })),
+          ]}
+        />
       </div>
+      <AssigneePicker value={assignee} onChange={setAssignee} />
       <div className="mt-2 flex justify-end gap-2">
         <Button type="button" variant="ghost" onClick={onCancel}>
           取消

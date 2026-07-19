@@ -6,6 +6,7 @@ import useSWR from "swr";
 import { api, listFetcher, ApiError } from "@/lib/api";
 import { useToast } from "@/lib/toast";
 import { useAuth } from "@/lib/auth";
+import { useProjectScope } from "@/lib/project-scope";
 import type { Requirement } from "@/lib/types";
 import { statusStyle, PRIORITY_STYLES, REQUIREMENT_COLUMNS } from "@/lib/constants";
 import Header from "@/components/layout/Header";
@@ -16,14 +17,19 @@ import { AssigneeAvatar } from "@/components/ui/Avatar";
 import { SkeletonRows } from "@/components/ui/Skeleton";
 import EmptyState from "@/components/ui/EmptyState";
 import ErrorState from "@/components/ui/ErrorState";
+import Pagination from "@/components/ui/Pagination";
 import RequirementForm from "@/components/requirements/RequirementForm";
 import AssigneePicker, { AssigneeValue } from "@/components/AssigneePicker";
 import TicketDrawer from "@/components/TicketDrawer";
 import FilterBar from "@/components/FilterBar";
 
+// 与后端 pagination.DEFAULT_LIMIT 对齐，便于对照排查。
+const PAGE_SIZE = 50;
+
 export default function RequirementsPage() {
   const toast = useToast();
   const { user } = useAuth();
+  const { scopeParam, scopeLabel } = useProjectScope();
   // 后端 POST /requirements 限 admin|pm（§2.4），member 隐藏新建入口，避免提交后才 403。
   const canCreate = user?.role === "admin" || user?.role === "pm";
   // 【§2.9-C1】/assign 后端限 pm/admin；判据同 canCreate，member 不应看到点了必 403 的「指派」按钮。
@@ -61,6 +67,8 @@ export default function RequirementsPage() {
     return () => clearTimeout(t);
   }, [keyword]);
 
+  const [offset, setOffset] = useState(0);
+
   const params = new URLSearchParams();
   if (debounced) params.set("q", debounced);
   if (status) params.set("status", status);
@@ -69,9 +77,26 @@ export default function RequirementsPage() {
     params.set("assignee_type", assignee.assignee_type);
     params.set("assignee_id", String(assignee.assignee_id));
   }
-  const listKey = `/requirements${params.toString() ? `?${params.toString()}` : ""}`;
-  const { data, error, mutate } = useSWR(listKey, listFetcher<Requirement>);
+  if (scopeParam) params.set("project_id", scopeParam);
+  params.set("limit", String(PAGE_SIZE));
+  params.set("offset", String(offset));
+  const listKey = `/requirements?${params.toString()}`;
+  const { data, error, mutate } = useSWR(listKey, listFetcher<Requirement>, {
+    keepPreviousData: true, // 翻页保留上一页数据，消除骨架闪烁
+  });
   const reqs = data?.items;
+
+  // 任一筛选条件（含项目作用域）变化 → 回第一页。否则「筛出 3 条却停在 offset=50」→ 空表误读。
+  const filterSignature =
+    `${debounced}|${status}|${priority}|${assignee.assignee_type}|${assignee.assignee_id}|${scopeParam}`;
+  useEffect(() => {
+    setOffset(0);
+  }, [filterSignature]);
+
+  // 越界自愈：他人删单致 total 缩小、或刷新到深页。
+  useEffect(() => {
+    if (data && offset > 0 && offset >= data.total) setOffset(0);
+  }, [data, offset]);
 
   const [creating, setCreating] = useState(false);
   const [openId, setOpenId] = useState<number | null>(null);
@@ -106,7 +131,11 @@ export default function RequirementsPage() {
     <>
       <Header
         title="需求"
-        subtitle={data ? `共 ${data.total} 条 · 点击行查看详情与协作` : "创建、指派与跟踪需求"}
+        subtitle={
+          data
+            ? `共 ${data.total} 条 · 点击行查看详情与协作${scopeLabel ? ` · ${scopeLabel}` : ""}`
+            : "创建、指派与跟踪需求"
+        }
         action={
           <div className="flex items-center gap-2">
             <Link href="/requirements/board">
@@ -153,6 +182,7 @@ export default function RequirementsPage() {
               ) : undefined}
             />
           ) : (
+            <>
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border text-left text-ink-muted">
@@ -209,6 +239,14 @@ export default function RequirementsPage() {
                 ))}
               </tbody>
             </table>
+            <Pagination
+              offset={offset}
+              limit={PAGE_SIZE}
+              total={data?.total ?? 0}
+              onOffset={setOffset}
+              disabled={!data}
+            />
+            </>
           )}
         </div>
       </main>

@@ -5,30 +5,44 @@ from flask_jwt_extended import jwt_required
 from extensions import db
 from models.user import User, ROLES
 from services.auth_helpers import require_role
-from services.validation import json_body, want_str
+from services.pagination import paginate, with_total_count
+from services.validation import json_body, want_str, ValidationError
 from routes.auth import _pick_color
+from routes.me import _EMAIL_RE
 
 bp = Blueprint("users", __name__, url_prefix="/api/users")
+
+
+def _want_email(data, key="email"):
+    """取一个可选邮箱：非串 / 超 255 / 格式非法 → 400（与 me.py 自助改资料同一水位，§2.6③）。"""
+    email = want_str(data, key, required=False, max_len=255) or None
+    if email is not None and not _EMAIL_RE.match(email):
+        raise ValidationError(f"{key} is invalid", field=key, expected="email address")
+    return email
 
 
 @bp.get("")
 @jwt_required()
 def list_users():
-    users = User.query.order_by(User.id.asc()).all()
-    return jsonify([u.to_dict() for u in users]), 200
+    # 【§2.9-G1】补分页 + X-Total-Count（响应体仍是裸数组，契约不变）；消费方显式传 limit=200。
+    q = User.query.order_by(User.id.asc())
+    rows, total = paginate(q)
+    resp = jsonify([u.to_dict() for u in rows])
+    return with_total_count(resp, total), 200
 
 
 @bp.post("")
 @require_role("admin")
 def create_user():
     # 【§2.2】非串 username/display_name → 400（此前 .strip() 500）；role 走 choices 归一。
+    # 【§2.6③】max_len 对齐 models/user.py 列宽（username 64 / display_name 128 / email 255）。
     data = json_body()
-    username = want_str(data, "username")
+    username = want_str(data, "username", max_len=64)
     password = want_str(data, "password", strip=False)
     role = want_str(data, "role", default="member", choices=ROLES)
-    display_name = want_str(data, "display_name") or username
-    # 【§2.4-C2】非串 email → 400（此前绑到 String 列 commit 触 500）；缺省/空 → None。
-    email = want_str(data, "email", required=False) or None
+    display_name = want_str(data, "display_name", max_len=128) or username
+    # 【§2.4-C2 / §2.6③】非串 email → 400；超长 / 格式非法 → 400（此前管理员路径两者都没有）。
+    email = _want_email(data)
 
     if not username or not password:
         return jsonify({"error": "username and password are required"}), 400
@@ -63,11 +77,11 @@ def patch_user(user_id):
     if "role" in data:
         user.role = want_str(data, "role", required=True, choices=ROLES)
     if "display_name" in data:
-        # 非串 display_name → 400（此前直接赋值，落库后 to_dict 类型脏）。
-        user.display_name = want_str(data, "display_name")
+        # 非串 display_name → 400（此前直接赋值，落库后 to_dict 类型脏）；超长 → 400（§2.6③）。
+        user.display_name = want_str(data, "display_name", max_len=128)
     if "email" in data:
-        # 【§2.4-C2】非串 email → 400（此前直接赋值，commit 触 500）；空 → None。
-        user.email = want_str(data, "email", required=False) or None
+        # 【§2.4-C2 / §2.6③】非串 / 超长 / 格式非法 → 400；空 → None。
+        user.email = _want_email(data)
     if data.get("password"):
         user.set_password(want_str(data, "password", strip=False, required=True))
 

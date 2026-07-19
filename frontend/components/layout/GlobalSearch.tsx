@@ -10,6 +10,7 @@ import {
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import { swrFetcher } from "@/lib/api";
+import { useProjectScope } from "@/lib/project-scope";
 import { statusStyle } from "@/lib/constants";
 import type { SearchResults, Requirement, Bug } from "@/lib/types";
 import Badge from "@/components/ui/Badge";
@@ -51,9 +52,11 @@ export default function GlobalSearch() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   // 防抖：输入停 300ms 后进入 SWR key；每次输入即重置高亮并展开下拉。
+  // 【H2】`setOpen(true)` 必须**有守卫**：onSelect 会同时置 open=false 与 query=""，
+  // 而 query 变化又会触发本 effect —— 无守卫时下拉会在选中后立刻「闪回」再等 300ms 才消失。
   useEffect(() => {
     setActive(-1);
-    setOpen(true);
+    if (query.trim()) setOpen(true);
     const t = setTimeout(() => setDebounced(query.trim()), DEBOUNCE_MS);
     return () => clearTimeout(t);
   }, [query]);
@@ -96,6 +99,7 @@ export default function GlobalSearch() {
     );
     setOpen(false);
     setQuery("");
+    setDebounced("");   // 【H2】同步清空，否则下拉的 `open && debounced` 条件仍成立 300ms。
   }
 
   function onSeeAll(kind: Kind) {
@@ -180,6 +184,8 @@ function DropdownMessage({ text }: { text: string }) {
 }
 
 function SearchDropdown({ data, error, active, onSelect, onSeeAll }: DropdownProps) {
+  // 必须在任何早返回**之前**调用（React hooks 规则）。
+  const { scopeLabel } = useProjectScope();
   if (error) return <DropdownMessage text="搜索服务暂不可用" />; // P2-2：后端不可用降级
   if (!data) return <DropdownMessage text="搜索中…" />;
   if (data.counts.requirements === 0 && data.counts.bugs === 0) {
@@ -197,6 +203,12 @@ function SearchDropdown({ data, error, active, onSelect, onSeeAll }: DropdownPro
         items={data.bugs} total={data.counts.bugs}
         base={data.requirements.length} active={active} onSelect={onSelect} onSeeAll={onSeeAll}
       />
+      {/* 【§2.4⑦'】搜索的语义就是「全局」，**有意不受 Header 项目切换器约束** —— 显式标注，
+          否则用户看到 Header 写着某个项目，却在同一屏读到跨项目的搜索结果。
+          只在选了具体项目时标注（验收 C8：切回「全部项目」时消失）。 */}
+      {scopeLabel && (
+        <div className="px-4 py-2 text-[11px] text-ink-muted/70">搜索范围：全部项目</div>
+      )}
     </div>
   );
 }

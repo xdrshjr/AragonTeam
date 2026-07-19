@@ -7,22 +7,19 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required
 
 from services import search
+from services.scope import want_query_int
 
 bp = Blueprint("search", __name__, url_prefix="/api/search")
-
-
-def _coerce_limit(value):
-    """把 limit 参数安全 clamp 到 [1, MAX_LIMIT]；缺省/非法 → DEFAULT_LIMIT。"""
-    if value is None:
-        return search.DEFAULT_LIMIT
-    return max(1, min(value, search.MAX_LIMIT))
 
 
 @bp.get("")
 @jwt_required()
 def global_search():
+    # 【scale-and-project-scope §2.6①-C】查询串整型统一走 want_query_int：既有 clamp 语义
+    # 不变（缺省 5、钳到 [1,20]），但非整数 limit 由「静默忽略」收紧为 400，与列表端点一致。
     keyword = (request.args.get("q") or "").strip()
-    limit = _coerce_limit(request.args.get("limit", type=int))
+    limit = want_query_int("limit", default=search.DEFAULT_LIMIT,
+                           minimum=1, maximum=search.MAX_LIMIT, clamp=True)
     if not keyword:
         return jsonify({
             "query": "", "requirements": [], "bugs": [],

@@ -10,6 +10,8 @@ interface Props {
   title: string;
   items: Card[];
   entity: "requirements" | "bugs";
+  /** 逐卡计算「当前用户可否移动它」（§2.8①），由 KanbanBoard 传入。 */
+  canDragCard?: (card: Card) => boolean;
   onConvert?: (req: Requirement) => void;
   onOpen?: (card: Card) => void;
 }
@@ -20,6 +22,7 @@ export default function KanbanColumn({
   title,
   items,
   entity,
+  canDragCard,
   onConvert,
   onOpen,
 }: Props) {
@@ -53,6 +56,7 @@ export default function KanbanColumn({
               key={card.id}
               card={card}
               entity={entity}
+              canDrag={canDragCard ? canDragCard(card) : true}
               onConvert={onConvert}
               onOpen={onOpen}
             />

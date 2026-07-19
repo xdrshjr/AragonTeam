@@ -11,6 +11,8 @@ interface Props {
   card: Card;
   entity: "requirements" | "bugs";
   overlay?: boolean; // DragOverlay 里渲染时禁用 dnd 绑定
+  /** 当前用户是否可移动这张卡（后端 can_manage_ticket 同判据）。false 时禁用拖拽。 */
+  canDrag?: boolean;
   onConvert?: (req: Requirement) => void; // 需求转 BUG
   onOpen?: (card: Card) => void; // 点击卡片打开工单详情抽屉（§2.4，与拖拽互斥）
 }
@@ -19,14 +21,18 @@ function isBug(card: Card): card is Bug {
   return (card as Bug).severity !== undefined;
 }
 
-export default function KanbanCard({ card, entity, overlay, onConvert, onOpen }: Props) {
+export default function KanbanCard({
+  card, entity, overlay, canDrag = true, onConvert, onOpen,
+}: Props) {
   // Phase-2 §2.6：改用 useSortable 支持同列精确重排（SortableContext 内生效）。
+  // 【§2.8①】无管理权的卡**不可拖**：此前对每张卡无条件启用，member 拖别人的卡会飞过去又弹回，
+  // 并弹出后端原样的英文 toast `forbidden` —— 与抽屉早已按 canManage 门禁的做法不一致。
   const {
     attributes, listeners, setNodeRef, transform, transition, isDragging,
   } = useSortable({
     id: card.id,
     data: { fromStatus: card.status },
-    disabled: overlay,
+    disabled: overlay || !canDrag,
   });
 
   const style = {
@@ -51,7 +57,11 @@ export default function KanbanCard({ card, entity, overlay, onConvert, onOpen }:
       style={style}
       className={[
         "group rounded-xl border border-border bg-surface p-3 shadow-card",
-        overlay ? "shadow-lift rotate-[1.5deg]" : "cursor-grab active:cursor-grabbing",
+        overlay
+          ? "shadow-lift rotate-[1.5deg]"
+          : canDrag
+            ? "cursor-grab active:cursor-grabbing"
+            : "cursor-pointer",
         isDragging ? "opacity-40" : "",
       ].join(" ")}
       // 点击打开详情抽屉；拖拽与点击互斥由 KanbanBoard 的 dragging 守卫兜底（§2.4）。
@@ -85,7 +95,10 @@ export default function KanbanCard({ card, entity, overlay, onConvert, onOpen }:
               e.stopPropagation();
               onConvert(card as Requirement);
             }}
-            className="rounded-md border border-[#E8C9BC] px-2 py-0.5 text-xs text-clay-dark opacity-0 transition-opacity hover:bg-clay-soft/40 group-hover:opacity-100"
+            aria-label={`把需求 #${card.id} 转为 BUG`}
+            // 【H6】opacity:0 **不移除命中区**：触屏点卡片右下角会误触发这个**不可逆**的转 BUG。
+            // 用 pointer-events 真正屏蔽命中，并给键盘用户留 focus-visible 通路。
+            className="rounded-md border border-[#E8C9BC] px-2 py-0.5 text-xs text-clay-dark pointer-events-none opacity-0 transition-opacity hover:bg-clay-soft/40 group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100"
           >
             转 BUG
           </button>

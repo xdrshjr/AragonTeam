@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import useSWR from "swr";
-import { swrFetcher } from "@/lib/api";
+import { USERS_KEY, swrFetcher } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import type { User } from "@/lib/types";
 import { ROLE_LABELS } from "@/lib/constants";
@@ -16,7 +16,7 @@ import MemberFormModal, { MemberFormState } from "@/components/admin/MemberFormM
 export default function TeamPage() {
   const { user: me } = useAuth();
   // 【§2.7-A3】接 error/加载态：失败不再渲染空表（误读为「无成员」），加载中给骨架。
-  const { data: users, error, mutate } = useSWR<User[]>("/users", swrFetcher);
+  const { data: users, error, mutate } = useSWR<User[]>(USERS_KEY, swrFetcher);
   const isAdmin = me?.role === "admin";
   // 建 / 改 / 重置密码三态弹窗（后端写接口限 admin，member 隐藏所有写入口）。
   const [editing, setEditing] = useState<MemberFormState | null>(null);

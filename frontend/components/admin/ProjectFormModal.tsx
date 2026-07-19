@@ -15,7 +15,7 @@ import Button from "@/components/ui/Button";
 interface Props {
   open: boolean;
   onClose: () => void;
-  onSaved: () => void; // 成功后：关闭 + mutate("/projects")
+  onSaved: () => void; // 成功后：关闭 + mutate(PROJECTS_KEY)（由调用方 projects 页负责）
 }
 
 export default function ProjectFormModal({ open, onClose, onSaved }: Props) {

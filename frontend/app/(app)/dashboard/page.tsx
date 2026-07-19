@@ -3,6 +3,7 @@
 import useSWR from "swr";
 import Link from "next/link";
 import { swrFetcher } from "@/lib/api";
+import { useProjectScope } from "@/lib/project-scope";
 import type { Stats } from "@/lib/types";
 import {
   statusStyle,
@@ -40,19 +41,36 @@ function DistRow({
   );
 }
 
+/** 不受项目作用域约束的区块标注（§2.4⑦'）：只在用户确实选了具体项目时出现。 */
+function GlobalHint({ show }: { show: boolean }) {
+  if (!show) return null;
+  return <span className="text-xs font-normal text-ink-muted">（全部项目）</span>;
+}
+
 export default function DashboardPage() {
-  const { data: stats, error, mutate } = useSWR<Stats>("/stats", swrFetcher);
+  const { scopeParam, scopeLabel } = useProjectScope();
+  const { data: stats, error, mutate } = useSWR<Stats>(
+    `/stats${scopeParam ? `?project_id=${scopeParam}` : ""}`,
+    swrFetcher
+  );
+  // Agent / 成员 / 活动是全局维度（后端 §2.4③ 有意不按项目过滤）——必须显式标注，
+  // 否则 Header 写着「ARA」而同一屏是跨项目数据，就是本轮立誓要消灭的「静默说谎 UI」。
+  const isScoped = scopeLabel !== null;
 
   const cards: { label: string; value: number | string; href?: string }[] = [
     { label: "需求总数", value: stats?.requirements.total ?? "—", href: "/requirements" },
     { label: "BUG 总数", value: stats?.bugs.total ?? "—", href: "/bugs" },
     {
-      label: "Agent（空闲 / 总）",
+      label: isScoped ? "Agent（空闲 / 总）· 全部项目" : "Agent（空闲 / 总）",
       value: stats ? `${stats.agents.idle} / ${stats.agents.total}` : "—",
       href: "/agents",
     },
     // 【§2.10-D5】本周活动数无有意义的导航目标 → 纯展示卡（去死链；此前 href:"/dashboard" 原地跳转）。
-    { label: "本周活动数", value: stats?.activities_this_week ?? "—" },
+    // 【§2.4⑦'】Agent 与活动两张卡不随项目筛选，标题上直接注明。
+    {
+      label: isScoped ? "本周活动数（全部项目）" : "本周活动数",
+      value: stats?.activities_this_week ?? "—",
+    },
   ];
 
   const reqTotal = stats?.requirements.total ?? 0;
@@ -61,7 +79,10 @@ export default function DashboardPage() {
 
   return (
     <>
-      <Header title="仪表盘" subtitle="团队与 Agent 协作全景" />
+      <Header
+        title="仪表盘"
+        subtitle={scopeLabel ? `团队与 Agent 协作全景 · ${scopeLabel}` : "团队与 Agent 协作全景"}
+      />
       <main className="flex-1 overflow-y-auto p-6">
         {error && !stats ? (
           <ErrorState message="无法加载仪表盘数据" onRetry={() => mutate()} />
@@ -139,7 +160,10 @@ export default function DashboardPage() {
 
           {/* Agent 利用率 + 最近活动 */}
           <div className="rounded-xl border border-border bg-surface p-5 shadow-card">
-            <h2 className="mb-4 font-serif text-lg text-ink">Agent 利用率</h2>
+            <h2 className="mb-4 flex items-center gap-1.5 font-serif text-lg text-ink">
+              Agent 利用率
+              <GlobalHint show={isScoped} />
+            </h2>
             <div className="mb-2 flex items-baseline justify-between">
               <span className="font-serif text-2xl text-ink">{utilizationPct}%</span>
               <span className="text-xs text-ink-muted">
@@ -154,7 +178,10 @@ export default function DashboardPage() {
               />
             </div>
 
-            <h3 className="mb-2 mt-5 text-sm font-semibold text-ink">最近活动</h3>
+            <h3 className="mb-2 mt-5 flex items-center gap-1.5 text-sm font-semibold text-ink">
+              最近活动
+              <GlobalHint show={isScoped} />
+            </h3>
             <div className="space-y-3">
               {stats?.recent_activities?.length ? (
                 stats.recent_activities.slice(0, 6).map((a) => (

@@ -1,7 +1,7 @@
 "use client";
 
 import useSWR from "swr";
-import { swrFetcher } from "@/lib/api";
+import { AGENTS_KEY, USERS_KEY, swrFetcher } from "@/lib/api";
 import type { User, Agent, AssigneeType } from "@/lib/types";
 import { AGENT_KIND_LABELS } from "@/lib/constants";
 
@@ -19,8 +19,8 @@ interface Props {
 // 统一「指派给 人 or Agent」选择器：一个 select，选项分「成员」与「Agent」两组。
 // value 编码为 "user:3" / "agent:1" / ""（未指派）。
 export default function AssigneePicker({ label = "指派给", value, onChange }: Props) {
-  const { data: users } = useSWR<User[]>("/users", swrFetcher);
-  const { data: agents } = useSWR<Agent[]>("/agents", swrFetcher);
+  const { data: users } = useSWR<User[]>(USERS_KEY, swrFetcher);
+  const { data: agents } = useSWR<Agent[]>(AGENTS_KEY, swrFetcher);
 
   const current =
     value.assignee_type && value.assignee_id

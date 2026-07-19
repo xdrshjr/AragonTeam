@@ -3,9 +3,10 @@
 import { useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import Link from "next/link";
-import { api, swrFetcher, listFetcher, ApiError } from "@/lib/api";
+import { AGENTS_KEY, api, swrFetcher, listFetcher, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/lib/toast";
+import { useProjectScope } from "@/lib/project-scope";
 import type {
   Agent,
   Requirement,
@@ -33,7 +34,8 @@ export default function AgentsPage() {
   const { user } = useAuth();
   const toast = useToast();
   const { mutate } = useSWRConfig();
-  const { data: agents, error: agentsError } = useSWR<Agent[]>("/agents", swrFetcher);
+  const { scopeLabel } = useProjectScope();
+  const { data: agents, error: agentsError } = useSWR<Agent[]>(AGENTS_KEY, swrFetcher);
   // 【§2.5-A1】不变量：一个 SWR key 只对应一种 fetcher 形状。此处**绝不**复用列表页的
   // "/requirements"/"/bugs" 裸 key（listFetcher 回 {items,total} 对象），否则 Agents 页拿到
   // 对象、workload() 对其 .filter 崩溃。改用带 assignee_type=agent 的专用 key + listFetcher，
@@ -56,16 +58,15 @@ export default function AgentsPage() {
   // 自主运行后刷新看板 / 列表 / Agent / 仪表盘 / 未读数。
   // 【§2.5-A1】负载用的 key 已换成带过滤的专用 key，mutate 必须同步，否则运行后负载不刷新。
   function revalidateAll() {
-    for (const k of [
-      "/agents",
-      "/requirements?assignee_type=agent&limit=200",
-      "/bugs?assignee_type=agent&limit=200",
-      "/stats",
-      "/board/requirements", "/board/bugs",
-      "/notifications/unread-count",
-    ]) {
-      mutate(k);
-    }
+    // 用**前缀函数式 key** 而非字面量清单：这些 key 现在都可能带 ?project_id= / ?limit= 等
+    // 后缀（scale-and-project-scope §2.4），逐条写死会在切换项目后静默漏刷。
+    mutate(
+      (key) =>
+        typeof key === "string" &&
+        ["/agents", "/requirements", "/bugs", "/stats", "/board/", "/notifications"].some((p) =>
+          key.startsWith(p)
+        )
+    );
   }
 
   function workload(agentId: number) {
@@ -153,7 +154,11 @@ export default function AgentsPage() {
     <>
       <Header
         title="Agent"
-        subtitle="AI 执行者 · 可被指派需求与 BUG 的一等公民"
+        // Agent 是全局共享的执行者，不隶属项目 → 负载计数**有意不随项目筛选**（§2.4⑦'）。
+        // 标注只在选了具体项目时出现（验收 C8：切回「全部项目」时消失）。
+        subtitle={`AI 执行者 · 可被指派需求与 BUG 的一等公民${
+          scopeLabel ? " · 不随项目筛选" : ""
+        }`}
         action={
           canOrchestrate ? (
             <div className="flex items-center gap-2">
@@ -169,7 +174,7 @@ export default function AgentsPage() {
       />
       <main className="flex-1 overflow-y-auto p-6">
         {agentsError && !agents ? (
-          <ErrorState message="无法加载 Agent 列表" onRetry={() => mutate("/agents")} />
+          <ErrorState message="无法加载 Agent 列表" onRetry={() => mutate(AGENTS_KEY)} />
         ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
           {agents?.map((a) => {
@@ -251,6 +256,16 @@ export default function AgentsPage() {
               </div>
             );
           })}
+          {!agents && !agentsError && (
+            <>
+              {[0, 1, 2].map((i) => (
+                <div
+                  key={i}
+                  className="h-56 animate-pulse rounded-xl border border-border bg-black/[0.03]"
+                />
+              ))}
+            </>
+          )}
           {agents && agents.length === 0 && (
             <div className="col-span-full rounded-xl border border-dashed border-border p-10 text-center text-ink-muted">
               暂无 Agent。
@@ -265,7 +280,7 @@ export default function AgentsPage() {
         onClose={() => setForm(null)}
         onSaved={() => {
           setForm(null);
-          mutate("/agents");
+          mutate(AGENTS_KEY);
         }}
       />
     </>

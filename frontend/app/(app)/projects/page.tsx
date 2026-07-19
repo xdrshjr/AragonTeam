@@ -4,9 +4,11 @@
 // 后端仅提供 list/create，本页只做列表 + 新建；编辑 / 删除按 §8 交棒未来，不放假按钮。
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import useSWR from "swr";
-import { swrFetcher } from "@/lib/api";
+import { PROJECTS_KEY, USERS_KEY, swrFetcher } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { useProjectScope } from "@/lib/project-scope";
 import type { Project, User } from "@/lib/types";
 import Header from "@/components/layout/Header";
 import Button from "@/components/ui/Button";
@@ -17,10 +19,20 @@ import ProjectFormModal from "@/components/admin/ProjectFormModal";
 
 export default function ProjectsPage() {
   const { user } = useAuth();
-  const { data: projects, error, mutate } = useSWR<Project[]>("/projects", swrFetcher);
-  const { data: users } = useSWR<User[]>("/users", swrFetcher);
+  const router = useRouter();
+  const { scope, setScope } = useProjectScope();
+  // 【评审 R4】必须与 ProjectScopeProvider **同 key**（PROJECTS_KEY），SWR 才共享同一份缓存：
+  // 否则新建项目后本页 mutate() 刷不到切换器，下拉里看不到新项。
+  const { data: projects, error, mutate } = useSWR<Project[]>(PROJECTS_KEY, swrFetcher);
+  const { data: users } = useSWR<User[]>(USERS_KEY, swrFetcher);
   const canCreate = user?.role === "admin" || user?.role === "pm";
   const [creating, setCreating] = useState(false);
+
+  // 【§2.4⑦】此前表格行不可点击、无链接——侧边栏把「项目」作为一级导航，点进来却是死胡同。
+  function openProject(p: Project) {
+    setScope(p.id);
+    router.push("/requirements");
+  }
 
   function ownerName(ownerId: number | null): string {
     if (ownerId == null) return "—";
@@ -67,13 +79,27 @@ export default function ProjectsPage() {
               </thead>
               <tbody>
                 {projects.map((p) => (
-                  <tr key={p.id} className="border-b border-border last:border-0 hover:bg-black/[0.015]">
+                  <tr
+                    key={p.id}
+                    onClick={() => openProject(p)}
+                    className={[
+                      "cursor-pointer border-b border-border last:border-0 hover:bg-black/[0.015]",
+                      scope === p.id ? "bg-clay-soft/30" : "",
+                    ].join(" ")}
+                  >
                     <td className="px-4 py-3">
                       <span className="rounded-md bg-clay-soft/60 px-2 py-0.5 font-mono text-xs font-medium text-clay-dark">
                         {p.key}
                       </span>
                     </td>
-                    <td className="px-4 py-3 font-medium text-ink">{p.name}</td>
+                    <td className="px-4 py-3 font-medium text-ink">
+                      {p.name}
+                      {scope === p.id && (
+                        <span className="ml-2 rounded-md border border-[#E8C9BC] px-1.5 py-0.5 text-xs font-normal text-clay-dark">
+                          当前
+                        </span>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-ink-muted">{p.description || "—"}</td>
                     <td className="px-4 py-3 text-ink-muted">{ownerName(p.owner_id)}</td>
                   </tr>

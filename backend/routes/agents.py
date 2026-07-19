@@ -10,6 +10,7 @@ from flask_jwt_extended import jwt_required
 from extensions import db
 from models.agent import Agent, AGENT_KINDS
 from services.auth_helpers import require_role
+from services.pagination import paginate, with_total_count
 from services.validation import json_body, want_str, want_int
 from services import agent_autopilot
 
@@ -28,6 +29,13 @@ def _run_with_lock(agent, fn):
     try:
         return fn()
     finally:
+        # 【§2.9-G3】先回滚可能的半提交事务：若 fn() 抛 DB 级异常，这里的 commit 自身会抛
+        # PendingRollbackError，软锁恢复丢失 → Agent 永久 busy，此后每次 autorun/tick 都 409，
+        # 只能靠管理员手动 PATCH 复位。
+        try:
+            db.session.rollback()
+        except Exception:  # pragma: no cover - 回滚失败不应掩盖原异常
+            pass
         agent.status = prev
         db.session.commit()
 
@@ -35,8 +43,11 @@ def _run_with_lock(agent, fn):
 @bp.get("")
 @jwt_required()
 def list_agents():
-    agents = Agent.query.order_by(Agent.id.asc()).all()
-    return jsonify([a.to_dict() for a in agents]), 200
+    # 【§2.9-G1】补分页 + X-Total-Count（响应体仍是裸数组，契约不变）；消费方显式传 limit=200。
+    q = Agent.query.order_by(Agent.id.asc())
+    rows, total = paginate(q)
+    resp = jsonify([a.to_dict() for a in rows])
+    return with_total_count(resp, total), 200
 
 
 @bp.post("")
@@ -44,9 +55,11 @@ def list_agents():
 def create_agent():
     # 【§2.2】非串 name → 400（此前 .strip() 500）；kind 走 choices 归一。
     data = json_body()
-    name = want_str(data, "name")
+    # 【§2.6③】max_len 对齐 models/agent.py 的 String(64)：超长此前 201 落库，换 PG/MySQL 即 500。
+    name = want_str(data, "name", max_len=64)
     kind = want_str(data, "kind", default="generic", choices=AGENT_KINDS)
-    description = data.get("description")
+    # 【§2.6②】非串 description → 400（此前绑到 Text 列 commit 触 500）。
+    description = want_str(data, "description", required=False, strip=False) or None
 
     if not name:
         return jsonify({"error": "name is required"}), 400
@@ -77,7 +90,7 @@ def patch_agent(agent_id):
     data = json_body()
 
     if "name" in data:                                   # 新增：支持改名（编辑 Agent 的核心）
-        name = want_str(data, "name")                    # 非串 name → 400（此前 .strip() 500）
+        name = want_str(data, "name", max_len=64)        # 非串 name → 400；超长 → 400（§2.6③）
         if not name:
             return jsonify({"error": "name is required"}), 400
         if Agent.query.filter(Agent.name == name, Agent.id != agent.id).first():
@@ -94,7 +107,8 @@ def patch_agent(agent_id):
             return jsonify({"error": "status must be idle or offline"}), 400
         agent.status = status
     if "description" in data:
-        agent.description = data["description"]
+        # 【§2.6②】非串 description → 400（此前直接赋值，commit 触 500）。
+        agent.description = want_str(data, "description", required=False, strip=False) or None
 
     db.session.commit()
     return jsonify(agent.to_dict()), 200
@@ -134,9 +148,21 @@ def agents_autorun_all():
 @bp.post("/<int:agent_id>/claim-next")
 @require_role("admin", "pm")
 def agent_claim_next(agent_id):
+    """让 Agent 自主认领一张新单。
+
+    【§2.2⑤】busy/offline 门禁：此前 offline Agent 可认领成功（200），紧接着 /autorun 却 409
+    ——「吞了又不干」的纯陷阱态。与 /autorun、/tick、run=all 对齐。
+    **有意不改**：单步 agent-advance 仍不设 offline 门禁——那是 pm/admin 的手动操作，
+    人已经知道自己在做什么（第 2 轮评审 R5 的显式裁定），二者不矛盾。
+
+    【§2.2④】`generic` 自本轮起不参与自主认领（AGENT_CLAIMABLE["generic"] = []），
+    故对 generic Agent 恒返回 `{"claimed": null}` + 200（响应契约不变）。
+    """
     agent = db.session.get(Agent, agent_id)
     if agent is None:
         return jsonify({"error": "agent not found"}), 404
+    if agent.status in ("busy", "offline"):
+        return jsonify({"error": "agent is busy or offline"}), 409
     data = json_body()
     entity = data.get("entity")  # 可选：限定只认领某类
     _ent, ticket = agent_autopilot.claim_next(agent, entity=entity)

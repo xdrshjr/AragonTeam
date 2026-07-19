@@ -230,3 +230,112 @@ def test_autorun_all_skips_offline_agent(client, auth, data):
     dev_run = next(r for r in runs if r["agent"]["id"] == data["dev_agent_id"])
     assert any(s.get("reason") == "offline" for s in dev_run["skipped"])
     assert dev_run["agent"]["status"] == "offline"
+
+
+# ——————— scale-and-project-scope §2.2：交接泛化 + 工单级 Agent 闭环 ———————
+
+def test_kind_for_status_table_is_exactly_derived(app):
+    """§2.2① 派生表逐项锁死（7 条）。未来给 AGENT_FORWARD 加边时本断言会立刻失败，
+    形成护栏——「哪些状态会自动换人」不得静默漂移。"""
+    from services.agent_autopilot import _KIND_FOR_STATUS
+
+    assert _KIND_FOR_STATUS == {
+        ("requirement", "assigned"): None,          # dev / generic 皆可 → 不交接
+        ("requirement", "in_development"): "dev",
+        ("requirement", "bug_fixing"): "dev",
+        ("requirement", "testing"): "qa",           # 与第 2 轮完全一致
+        ("bug", "assigned"): None,
+        ("bug", "fixing"): "dev",
+        ("bug", "verifying"): "qa",                 # 与第 2 轮完全一致
+    }
+
+
+def test_generic_agent_no_longer_claims(client, auth, make_requirement, app):
+    """§2.2④ generic 不再自主认领（它在 AGENT_FORWARD 里只有 assigned 一条边，认领后必然
+    在下一状态无动作，而 assignee_id 已非空 → 其他 Agent 也不会再认领，单永久泊死）。
+    **响应契约不变**：仍是 200 + {"claimed": null}。"""
+    with app.app_context():
+        gen = Agent(name="generic-agent", kind="generic", status="idle")
+        db.session.add(gen)
+        db.session.commit()
+        gen_id = gen.id
+
+    make_requirement(title="没人认领我")
+    res = client.post(f"/api/agents/{gen_id}/claim-next", json={}, headers=auth("pm"))
+    assert res.status_code == 200
+    assert res.get_json()["claimed"] is None
+
+
+def test_ticket_level_advance_hands_off_to_qa(client, auth, make_requirement, data):
+    """§2.2③【本轮头号 P0】从工单抽屉连点推进：此前 assigned→in_development→testing 后
+    永久 409，单卡在 dev-agent 的 testing。现在第三次点击应交接给 qa 并推到 reviewing。"""
+    headers = auth("pm")
+    req = make_requirement(assignee=("agent", data["dev_agent_id"]))
+    path = f"/api/requirements/{req['id']}/agent-advance"
+
+    r1 = client.post(path, json={}, headers=headers)
+    assert r1.status_code == 200
+    assert r1.get_json()["ticket"]["status"] == "in_development"
+
+    r2 = client.post(path, json={}, headers=headers)
+    assert r2.status_code == 200
+    assert r2.get_json()["ticket"]["status"] == "testing"
+    # 推进成功后即时交接：负责人已变为 qa-agent，下一次点击由它接力。
+    assert r2.get_json()["ticket"]["assignee_id"] == data["qa_agent_id"]
+
+    r3 = client.post(path, json={}, headers=headers)
+    assert r3.status_code == 200, r3.get_json()
+    assert r3.get_json()["ticket"]["status"] == "reviewing"
+
+
+def test_ticket_level_advance_rescues_stale_bug(client, auth, make_bug, data):
+    """§2.2③ 存量卡死单（seed 的 qa-agent 持 fixing BUG）经一次点击即复活：
+    先交接给 dev，再重试一次推进。"""
+    headers = auth("pm")
+    bug = make_bug(assignee=("agent", data["dev_agent_id"]))
+    client.post(f"/api/bugs/{bug['id']}/agent-advance", json={}, headers=headers)  # → fixing
+    # 手动改派给 qa-agent，制造 seed 那种「qa 持 fixing」的卡死态。
+    client.patch(f"/api/bugs/{bug['id']}/assign",
+                 json={"assignee_type": "agent", "assignee_id": data["qa_agent_id"]},
+                 headers=headers)
+
+    r = client.post(f"/api/bugs/{bug['id']}/agent-advance", json={}, headers=headers)
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()["ticket"]["status"] == "verifying"
+    assert r.get_json()["agent"]["id"] == data["dev_agent_id"]   # 已交接给 dev 执行本步
+
+
+def test_handoff_never_steals_from_a_human(client, auth, make_requirement, data):
+    """§6.3-A3【评审 R2】交接只在 Agent 之间发生，**绝不**从人手里抢单。"""
+    headers = auth("pm")
+    req = make_requirement(assignee=("agent", data["dev_agent_id"]))
+    path = f"/api/requirements/{req['id']}/agent-advance"
+    client.post(path, json={}, headers=headers)
+    client.post(path, json={}, headers=headers)   # → testing（并已交接给 qa）
+    # 改派给人类 alice（member），随后跑全队一轮。
+    client.patch(f"/api/requirements/{req['id']}/assign",
+                 json={"assignee_type": "user", "assignee_id": data["member_id"]},
+                 headers=headers)
+    client.post("/api/agents/autorun-all", json={"claim": True}, headers=headers)
+
+    got = client.get(f"/api/requirements/{req['id']}", headers=headers).get_json()
+    assert got["assignee_type"] == "user"
+    assert got["assignee_id"] == data["member_id"]
+
+
+def test_handoff_skips_offline_target(client, auth, make_requirement, data):
+    """§6.3-A4 不得交接给 offline Agent。"""
+    headers = auth("pm")
+    client.patch(f"/api/agents/{data['qa_agent_id']}", json={"status": "offline"},
+                 headers=headers)
+    req = make_requirement(assignee=("agent", data["dev_agent_id"]))
+    path = f"/api/requirements/{req['id']}/agent-advance"
+    client.post(path, json={}, headers=headers)
+    r = client.post(path, json={}, headers=headers)
+    assert r.get_json()["ticket"]["status"] == "testing"
+    # qa 离线 → 不交接，单仍在 dev 名下。
+    assert r.get_json()["ticket"]["assignee_id"] == data["dev_agent_id"]
+    # 再点一次：仍无对口可用 Agent → 契约不变的 409。
+    r2 = client.post(path, json={}, headers=headers)
+    assert r2.status_code == 409
+    assert r2.get_json()["error"] == "agent has no action for this state"

@@ -21,6 +21,7 @@ from services.auth_helpers import (
     require_role, current_user, can_manage_ticket, forbidden,
 )
 from services.pagination import paginate, with_total_count
+from services.scope import apply_project_filter, project_scope, want_query_int
 from services.search import escape_like
 from services.validation import json_body, want_str, want_int
 from routes.requirements import (
@@ -34,17 +35,16 @@ bp = Blueprint("bugs", __name__, url_prefix="/api/bugs")
 @bp.get("")
 @jwt_required()
 def list_bugs():
-    q = Bug.query
-    project_id = request.args.get("project_id", type=int)
+    # 【§2.4】项目作用域：缺省=不过滤、整数=该项目、"none"=未归属（非法值 → 全局 400）。
+    q = apply_project_filter(Bug.query, Bug, project_scope())
     status = request.args.get("status")
     assignee_type = request.args.get("assignee_type")
-    assignee_id = request.args.get("assignee_id", type=int)
+    # 【§2.9-G2 / 评审 R1】整数过滤参数走 want_query_int：畸形值 400、超界值不再 500。
+    assignee_id = want_query_int("assignee_id")
     # 【Phase-3 §2.6】过滤 / 检索（全部可选、AND 组合、向后兼容；BUG 侧含 severity）。
     keyword = request.args.get("q")
     severity = request.args.get("severity")
-    reporter_id = request.args.get("reporter_id", type=int)
-    if project_id is not None:
-        q = q.filter_by(project_id=project_id)
+    reporter_id = want_query_int("reporter_id")
     if status:
         q = q.filter_by(status=status)
     if assignee_type:
@@ -97,7 +97,7 @@ def create_bug():
         related_requirement_id=related,
         status="open",
         reporter_id=reporter.id if reporter else None,
-        position=_next_position(Bug, "open"),
+        position=_next_position(Bug, "open", project_id),
     )
     db.session.add(bug)
     db.session.flush()
@@ -170,7 +170,7 @@ def assign_bug(bug_id):
     frm = bug.status
     if bug.status == "open" and workflow.can_transition("bug", "open", "assigned"):
         bug.status = "assigned"
-        bug.position = _next_position(Bug, "assigned")
+        bug.position = _next_position(Bug, "assigned", bug.project_id)
 
     target = db.session.get(User if assignee_type == "user" else Agent, bug.assignee_id)
     name = getattr(target, "display_name", None) or getattr(target, "name", str(assignee_id))
@@ -209,9 +209,10 @@ def move_bug(bug_id):
     if frm == to:
         # 同列内拖动（Phase-2 §2.6）。
         if index is not None:
-            _reindex_column(Bug, to, insert_id=bug.id, insert_index=index)
+            _reindex_column(Bug, to, bug.project_id,
+                            insert_id=bug.id, insert_index=index)
         else:
-            bug.position = _next_position(Bug, to)
+            bug.position = _next_position(Bug, to, bug.project_id)
         db.session.commit()
         return jsonify(bug.to_dict()), 200
 
@@ -224,9 +225,10 @@ def move_bug(bug_id):
 
     bug.status = to
     if index is not None:
-        _reindex_column(Bug, to, insert_id=bug.id, insert_index=index)
+        _reindex_column(Bug, to, bug.project_id,
+                        insert_id=bug.id, insert_index=index)
     else:
-        bug.position = _next_position(Bug, to)
+        bug.position = _next_position(Bug, to, bug.project_id)
     Activity.log("bug", bug.id, "moved", actor=_actor(),
                  from_status=frm, to_status=to, message=f"状态 {frm} → {to}")
     # 【Phase-3 §2.3】扇出：人类推进 → status_changed 通知。
@@ -252,9 +254,21 @@ def delete_bug(bug_id):
     Comment.query.filter_by(entity_type="bug", entity_id=bug_id).delete()
     # 【Phase-3 §5】删单一并删其通知。
     Notification.query.filter_by(entity_type="bug", entity_id=bug_id).delete()
-    # §2.8-3：删除进时间线。
-    Activity.log("bug", bug_id, "deleted", actor=_actor(),
-                 from_status=bug.status, message=f"删除 BUG「{bug.title}」")
+    # 【§2.7】删单一并删审计：SQLite 复用主键，残留审计会被下一张同 id 的单继承，
+    # 造成时间线串档 + 已删单标题泄露。有意**不再**写 "deleted" 审计（无查看入口且会被同批清掉）。
+    Activity.query.filter_by(entity_type="bug", entity_id=bug_id).delete()
     db.session.delete(bug)
     db.session.commit()
     return "", 204
+
+
+@bp.get("/<int:bug_id>/activities")
+@jwt_required()
+def bug_activities(bug_id):
+    """【§2.9-G4】与 requirements 侧对称的时间线端点（此前 BUG 侧缺失，纯路由不对称）。"""
+    bug = db.session.get(Bug, bug_id)
+    if bug is None:
+        return jsonify({"error": "bug not found"}), 404
+    acts = Activity.query.filter_by(entity_type="bug", entity_id=bug_id)\
+        .order_by(Activity.created_at.desc(), Activity.id.desc()).all()
+    return jsonify([a.to_dict() for a in acts]), 200

@@ -6,6 +6,7 @@ import { useAuth } from "@/lib/auth";
 import { ROLE_LABELS } from "@/lib/constants";
 import Avatar from "@/components/ui/Avatar";
 import GlobalSearch from "@/components/layout/GlobalSearch";
+import ProjectSwitcher from "@/components/layout/ProjectSwitcher";
 import NotificationBell from "@/components/notifications/NotificationBell";
 
 interface Props {
@@ -43,6 +44,9 @@ export default function Header({ title, subtitle, action }: Props) {
       </div>
 
       <div className="flex items-center gap-3">
+        {/* 阅读顺序：项目 → 搜索 → 页面动作 → 通知 → 头像。 */}
+        <ProjectSwitcher />
+
         <GlobalSearch />
 
         {action}

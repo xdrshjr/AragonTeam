@@ -13,6 +13,8 @@ import {
   DragEndEvent,
 } from "@dnd-kit/core";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
+import { useAuth } from "@/lib/auth";
+import { canManageTicket } from "@/lib/permissions";
 import type { Board, Card, Requirement } from "@/lib/types";
 import KanbanColumn from "@/components/kanban/KanbanColumn";
 import KanbanCard from "@/components/kanban/KanbanCard";
@@ -29,6 +31,7 @@ interface Props {
 // @dnd-kit 容器：列布局 + 列内可排序，拖拽落点回调。
 // 拖拽合法性交后端裁决（onMove → PATCH /move），前端只负责乐观 UI（§2.3 R-02）。
 export default function KanbanBoard({ board, entity, onMove, onConvert, onOpen }: Props) {
+  const { user } = useAuth();
   const [activeCard, setActiveCard] = useState<Card | null>(null);
   // 拖拽守卫：区分「点击打开抽屉」与「拖拽」，避免拖拽结束误触发 onClick。
   const draggingRef = useRef(false);
@@ -123,6 +126,8 @@ export default function KanbanBoard({ board, entity, onMove, onConvert, onOpen }
             title={col.title}
             items={col.items}
             entity={entity}
+            // 【§2.8①】与后端 /move 的 can_manage_ticket 同判据：无权的卡不给抓手、不可拖。
+            canDragCard={(card) => canManageTicket(user, card)}
             onConvert={onConvert}
             onOpen={handleOpen}
           />

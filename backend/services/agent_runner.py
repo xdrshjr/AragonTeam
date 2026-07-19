@@ -65,12 +65,19 @@ def plan(entity: str, kind: str, status: str):
     return AGENT_FORWARD.get((entity, kind, status))
 
 
-def _next_position(model, status: str) -> int:
-    """目标列下一个 position（该列现有最大值 + 1；空列为 0）。
+def _next_position(model, status: str, project_id) -> int:
+    """返回「同项目同状态」列的下一个 position（该列现有最大值 + 1；空列为 0）。
 
     与 routes.requirements._next_position 同语义；此处内联以避免 service→routes 依赖。
+    **两处必须同步修改**，否则 Agent 推进产生的 position 与路由产生的不同域，看板次序会错乱。
+
+    Args:
+        model: Requirement / Bug 模型类。
+        status: 目标状态列。
+        project_id: 工单所属项目 id，未归属传 None。**必填**（scale-and-project-scope 评审 R3：
+            给默认值会让漏传的调用点静默把单编进「未归属」号段，错得无声无息）。
     """
-    rows = model.query.filter_by(status=status).all()
+    rows = model.query.filter_by(status=status, project_id=project_id).all()
     return max((r.position for r in rows), default=-1) + 1
 
 
@@ -102,7 +109,7 @@ def advance_one(entity: str, ticket, agent):
 
     # 产出完成后再改状态、建评论——写事务窗口收敛到 commit 前的亚毫秒区间。
     ticket.status = to
-    ticket.position = _next_position(type(ticket), to)
+    ticket.position = _next_position(type(ticket), to, ticket.project_id)
 
     comment = Comment(
         entity_type=entity, entity_id=ticket.id,

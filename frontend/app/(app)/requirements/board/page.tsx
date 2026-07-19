@@ -7,6 +7,7 @@ import { api, ApiError } from "@/lib/api";
 import { useToast } from "@/lib/toast";
 import { useAuth } from "@/lib/auth";
 import { useBoard } from "@/hooks/useBoard";
+import { useProjectScope } from "@/lib/project-scope";
 import type { Requirement, Bug, Card } from "@/lib/types";
 import Header from "@/components/layout/Header";
 import Button from "@/components/ui/Button";
@@ -18,7 +19,8 @@ import ErrorState from "@/components/ui/ErrorState";
 export default function RequirementsBoardPage() {
   const router = useRouter();
   const toast = useToast();
-  const { board, error, isLoading, move, mutate } = useBoard("requirements");
+  const { scope, scopeLabel } = useProjectScope();
+  const { board, error, isLoading, move, mutate } = useBoard("requirements", scope);
   const { user } = useAuth();
   // 【§2.9-C2】转 BUG 后端限 pm/admin；member 不应看到点了必 403 的「转 BUG」按钮。
   const canConvert = user?.role === "admin" || user?.role === "pm";
@@ -29,8 +31,10 @@ export default function RequirementsBoardPage() {
   // 用 window.location + 事件而非 useSearchParams，规避静态预渲染的 Suspense 约束：
   // 跨页导航走 mount 读取；已在本看板时同路由 push 不重挂载，靠事件即时打开。
   useEffect(() => {
-    const t = new URLSearchParams(window.location.search).get("ticket");
-    if (t && !Number.isNaN(Number(t))) setOpenId(Number(t));
+    // 【H1】只接受正整数 id：?ticket=0 / ?ticket=abc 此前会让抽屉进入永不结束的骨架态，
+    // 整个看板被全屏遮罩挡住（须按 Esc 才能用）。
+    const t = Number(new URLSearchParams(window.location.search).get("ticket"));
+    if (Number.isInteger(t) && t > 0) setOpenId(t);
     function onOpen(e: Event) {
       const d = (e as CustomEvent<{ entity: string; id: number }>).detail;
       if (d?.entity === "requirements" && d.id != null) setOpenId(d.id);
@@ -63,7 +67,9 @@ export default function RequirementsBoardPage() {
     <>
       <Header
         title="需求看板"
-        subtitle="拖拽卡片以流转状态 / 同列重排 · 点击卡片查看详情与协作"
+        subtitle={`拖拽卡片以流转状态 / 同列重排 · 点击卡片查看详情与协作${
+          scopeLabel ? ` · ${scopeLabel}` : ""
+        }`}
         action={
           <Link href="/requirements">
             <Button variant="ghost" size="sm">

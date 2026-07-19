@@ -1,4 +1,4 @@
-import { SelectHTMLAttributes, forwardRef } from "react";
+import { SelectHTMLAttributes, forwardRef, useId } from "react";
 
 interface Option {
   value: string;
@@ -15,7 +15,10 @@ const Select = forwardRef<HTMLSelectElement, Props>(function Select(
   { label, options, placeholder, className = "", id, ...rest },
   ref
 ) {
-  const selectId = id || rest.name;
+  // 【H7】多数调用方既不传 id 也不传 name → <label> 与控件未关联：点标签不聚焦，
+  // 读屏播报「未命名输入框」。useId() 是 React 18 内置且 SSR 安全的稳定兜底。
+  const fallbackId = useId();
+  const selectId = id || rest.name || fallbackId;
   return (
     <div className="flex flex-col gap-1.5">
       {label && (

@@ -9,6 +9,7 @@ import { useToast } from "@/lib/toast";
 import { notificationIcon, notificationLabel } from "@/lib/constants";
 import type { Notification } from "@/lib/types";
 import { AuthorAvatar } from "@/components/ui/Avatar";
+import ErrorState from "@/components/ui/ErrorState";
 
 // 相对时间（created_at 带 Z，正确解析为本地时间）。
 function relTime(iso: string): string {
@@ -30,7 +31,7 @@ export default function NotificationBell() {
   const router = useRouter();
   const toast = useToast();
   const [open, setOpen] = useState(false);
-  const { count, items, loading, markRead, markAllRead } = useNotifications(open);
+  const { count, items, loading, error, refresh, markRead, markAllRead } = useNotifications(open);
   const wrapRef = useRef<HTMLDivElement>(null);
 
   async function onMarkAllRead() {
@@ -118,7 +119,11 @@ export default function NotificationBell() {
           </div>
 
           <div className="max-h-[22rem] overflow-y-auto">
-            {loading ? (
+            {/* 【§2.8③】error 分支必须在 loading **之前**：此前 error 从不被返回，
+                后端一挂下拉就永久停在「加载中…」，既无重试也无提示。 */}
+            {error ? (
+              <ErrorState message="无法加载通知" onRetry={() => refresh()} />
+            ) : loading ? (
               <div className="px-4 py-8 text-center text-sm text-ink-muted">加载中…</div>
             ) : items.length === 0 ? (
               <div className="px-4 py-10 text-center text-sm text-ink-muted">暂无通知</div>

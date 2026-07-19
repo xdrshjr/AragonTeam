@@ -28,48 +28,81 @@ _MODELS = {"requirement": Requirement, "bug": Bug}
 
 # (agent.kind) → 可主动认领的 [(entity, claimable_status), ...]；仅认领 assignee_id IS NULL 的单。
 # qa 处理的是已在流程中（testing/verifying）的**已指派**单，不主动认领「新」单（避免抢占分诊）。
+# 【scale-and-project-scope §2.2④】generic 亦置空：它在 AGENT_FORWARD 里只有 assigned 一条边，
+# 认领后必然在下一状态无动作，而 assignee_id 已非空 → 其他 Agent 也不会再认领，单永久泊死。
+# generic 仍可被 pm **显式指派**并推进一步，随后由 maybe_handoff 转给对口 kind，能力不减。
 AGENT_CLAIMABLE = {
     "dev": [("requirement", "new"), ("bug", "open")],
-    "generic": [("requirement", "new"), ("bug", "open")],
+    "generic": [],
     "qa": [],
 }
 
-# 推进到该「(entity)->status」即进入 qa 职责区，需交接给 qa-agent 继续（§2.2 核心 P1）。
-_QA_HANDOFF_STATUS = {"requirement": "testing", "bug": "verifying"}
 
+def _derive_kind_for_status() -> dict:
+    """由 AGENT_FORWARD 键集派生「(entity, status) → 唯一能处理它的 agent kind」。
 
-def _maybe_handoff_to_qa(entity, ticket):
-    """dev/generic 把单推进到 qa 泳道状态后，重指派给一个可用 qa-agent（**不 commit、不改状态**）。
+    单一真相：交接目标不另立一张会漂移的表，直接从推进表反推。
+    某状态若有 **多种** kind 都能处理（如 assigned 兼容 dev / generic），映射为 None
+    ——多解即不自动交接，避免抢走 generic 自己能干的活。
 
-    只改多态 assignee（assignee_type='agent' + assignee_id=qa.id）——状态迁移已由 advance_one
-    合法完成，本函数**绝不**触碰 status/position（不绕过状态机）。无可用 qa-agent → no-op。
-    返回被交接到的 qa-agent 或 None。
+    Returns:
+        {(entity, status): kind | None}
     """
-    if ticket.status != _QA_HANDOFF_STATUS.get(entity):
+    table: dict = {}
+    for entity, kind, status in agent_runner.AGENT_FORWARD:
+        key = (entity, status)
+        if key in table and table[key] != kind:
+            table[key] = None          # 多解 → 不交接
+        else:
+            table.setdefault(key, kind)
+    return table
+
+
+_KIND_FOR_STATUS = _derive_kind_for_status()
+
+
+def maybe_handoff(entity, ticket):
+    """当前 assignee 的 kind 与该状态所需 kind 不符时，重指派给一个可用的对口 Agent。
+
+    **不 commit、不改状态**——只改多态 assignee（assignee_type='agent' + assignee_id）。
+    状态迁移已由 advance_one 合法完成，本函数绝不触碰 status/position（不绕过状态机）。
+    无对口 / 无可用 Agent / 已是对口 kind / 该状态多解 / **单在人类手里** → 一律 no-op 返回 None。
+
+    Args:
+        entity: "requirement" | "bug"。
+        ticket: 已完成状态迁移的工单实例。
+
+    Returns:
+        被交接到的 Agent，或 None（未发生交接）。
+    """
+    need = _KIND_FOR_STATUS.get((entity, ticket.status))
+    if need is None:
         return None
-    # 已是 qa-agent 名下 → 无需交接。
-    if ticket.assignee_type == "agent" and ticket.assignee_id is not None:
-        cur = db.session.get(Agent, ticket.assignee_id)
-        if cur is not None and cur.kind == "qa":
-            return None
-    # 取一个非 offline 的 qa-agent（优先 idle；busy 也可，下一轮会处理）。
-    qa = Agent.query.filter_by(kind="qa").filter(Agent.status != "offline")\
+    # 【评审 R2 · 必须在最前】交接只在 Agent 之间发生，绝不从人手里抢单。守卫必须在
+    # db.session.get(Agent, …) **之前**：assignee 是人类时 assignee_id 指向 users.id，
+    # 若先去 Agent 表取，会取到一个同 id 的不相干 Agent，判据随即失真。
+    if ticket.assignee_type != "agent" or ticket.assignee_id is None:
+        return None
+    cur = db.session.get(Agent, ticket.assignee_id)
+    if cur is not None and cur.kind == need:
+        return None
+    # 取一个非 offline 的对口 Agent（优先 idle；busy 也可，下一轮会处理）。
+    target = Agent.query.filter_by(kind=need).filter(Agent.status != "offline")\
         .order_by(Agent.id.asc()).first()
-    if qa is None:
+    if target is None:
         return None
     ticket.assignee_type = "agent"
-    ticket.assignee_id = qa.id
+    ticket.assignee_id = target.id
     Activity.log(
-        entity, ticket.id, "assigned", actor=("agent", qa.id),
+        entity, ticket.id, "assigned", actor=("agent", target.id),
         from_status=ticket.status, to_status=ticket.status,
-        message=f"{qa.name} 接手{_label(entity)}「{ticket.title}」进入测试/验证",
+        message=f"{target.name} 接手{_label(entity)}「{ticket.title}」继续处理",
     )
-    # 【评审 R1】通知源单 reporter（人类）qa 已接手：复用 notify_claim（收件人=reporter、
-    # type="assigned"）。**绝不**用 notify_assignment——它仅通知**人类 assignee**，而此刻
-    # assignee 已是 qa-agent（Agent），会在 notifications.py 对非 user assignee 直接 return、
-    # 静默不发，使「reporter 收到交接通知」的验收断言落空。reporter 缺省（None）→ notify 自跳过。
-    notifications.notify_claim(ticket, entity, qa)
-    return qa
+    # 【第 2 轮评审 R1，务必保留】通知源单 reporter（人类）：必须用 notify_claim
+    # （收件人=reporter、type="assigned"）。**绝不**用 notify_assignment——它仅通知人类
+    # assignee，而此刻 assignee 已是 Agent，会被 notifications.py 静默丢弃。
+    notifications.notify_claim(ticket, entity, target)
+    return target
 
 
 def _claim_from_lane(agent, entity, claimable_status):
@@ -91,7 +124,8 @@ def _claim_from_lane(agent, entity, claimable_status):
     # new→assigned / open→assigned 均为 workflow 合法边，仍经 can_transition 裁决。
     if workflow.can_transition(entity, frm, "assigned"):
         ticket.status = "assigned"
-        ticket.position = agent_runner._next_position(model, "assigned")
+        # 【§2.5】position 按「同项目同状态」编号，与看板可见集合同域。
+        ticket.position = agent_runner._next_position(model, "assigned", ticket.project_id)
     Activity.log(
         entity, ticket.id, "assigned", actor=("agent", agent.id),
         from_status=frm, to_status=ticket.status,
@@ -104,6 +138,11 @@ def claim_next(agent, entity=None):
     """认领一张（可选 entity 限定只认领某类）。返回 (entity, ticket) 或 (None, None)。不 commit。
 
     命中后扇出通知给该单 reporter（若人类）；Agent 不作收件人（notify 内已保证）。
+
+    【§2.2④ · 评审 R10】`generic` 自本轮起**不参与自主认领**（AGENT_CLAIMABLE["generic"] = []），
+    故对 generic Agent 恒返回 (None, None)，由路由的「无可认领」分支渲染 —— **响应码与体保持
+    现网不变**（`{"claimed": null}` + 200）。generic 仍可被 pm 显式指派、推进一步，随后由
+    maybe_handoff 转给对口 kind。
     """
     lanes = AGENT_CLAIMABLE.get(agent.kind, [])
     for ent, status in lanes:
@@ -153,8 +192,8 @@ def autorun(agent, run_all=False):
                 try:
                     to, comment, _activity = agent_runner.advance_one(entity, ticket, agent)
                 except agent_runner.NoAgentAction:
-                    # 【评审 R2】存量卡在 qa 泳道状态的非-qa 单也要交接，否则永远走不完。
-                    handed = _maybe_handoff_to_qa(entity, ticket)
+                    # 【评审 R2】存量卡在他人泳道状态的单也要交接，否则永远走不完。
+                    handed = maybe_handoff(entity, ticket)
                     if handed is not None:
                         db.session.commit()
                         break   # 已易主，交 qa-agent 接力（本轮后续 / 下一轮）
@@ -174,8 +213,8 @@ def autorun(agent, run_all=False):
                     from_status=frm, to_status=to,
                 )
                 db.session.commit()
-                # —— dev→qa 交接（闭合自主闭环）；交接只改 assignee，随本步事务一并提交 ——
-                handed = _maybe_handoff_to_qa(entity, ticket)
+                # —— 按状态交接（闭合自主闭环）；交接只改 assignee，随本步事务一并提交 ——
+                handed = maybe_handoff(entity, ticket)
                 if handed is not None:
                     db.session.commit()
                     break   # 本 agent 不再推进此单（已易主），交由 qa-agent 下一轮/本轮处理

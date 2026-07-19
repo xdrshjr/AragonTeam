@@ -28,7 +28,11 @@ from services import workflow, agent_runner, notifications
 from services.auth_helpers import (
     require_role, current_user, can_manage_ticket, forbidden,
 )
+from services import agent_autopilot
 from services.pagination import paginate, with_total_count
+from services.scope import (
+    MAX_DB_INT, MIN_DB_INT, apply_project_filter, project_scope, want_query_int,
+)
 from services.search import escape_like
 from services.validation import json_body, want_str, want_int
 
@@ -37,9 +41,19 @@ bp = Blueprint("requirements", __name__, url_prefix="/api/requirements")
 
 # ————————————————————— 公共辅助 —————————————————————
 
-def _next_position(model, status: str) -> int:
-    """返回目标列的下一个 position（该列现有最大值 + 1；空列为 0）。"""
-    rows = model.query.filter_by(status=status).all()
+def _next_position(model, status: str, project_id) -> int:
+    """返回「同项目同状态」列的下一个 position（该列现有最大值 + 1；空列为 0）。
+
+    position 的语义是**看板某一列内的相对次序**，而看板已按项目过滤（board.py），
+    因此编号必须与看板可见集合同域，否则跨项目卡片会污染插入索引（§2.5）。
+
+    Args:
+        model: Requirement / Bug 模型类。
+        status: 目标状态列。
+        project_id: 工单所属项目 id，未归属传 None。**必填**（评审 R3：给默认值会让
+            漏传的调用点静默把单编进「未归属」号段，错得无声无息）。
+    """
+    rows = model.query.filter_by(status=status, project_id=project_id).all()
     return max((r.position for r in rows), default=-1) + 1
 
 
@@ -54,13 +68,17 @@ def _coerce_index(value):
     return idx if idx >= 0 else None
 
 
-def _reindex_column(model, status: str, insert_id=None, insert_index=None):
-    """把目标列内的卡按 (position,id) 排序后连续重编号 0..n-1（Phase-2 §2.6）。
+def _reindex_column(model, status: str, project_id, insert_id=None, insert_index=None):
+    """把「同项目同状态」列内的卡按 (position,id) 排序后连续重编号 0..n-1（Phase-2 §2.6）。
 
     若给 insert_id + insert_index，则先把该卡移到目标索引处再统一重编号，
     实现「同列 / 跨列精确插入」。insert_index 越界时钳到列尾。
+
+    Args:
+        project_id: 同为**必填位置参数**（§2.5 / 评审 R3）；插在第三位不影响现网以关键字传
+            insert_id / insert_index 的调用点。
     """
-    rows = model.query.filter_by(status=status)\
+    rows = model.query.filter_by(status=status, project_id=project_id)\
         .order_by(model.position.asc(), model.id.asc()).all()
     if insert_id is not None:
         rows = [r for r in rows if r.id != insert_id]
@@ -78,6 +96,9 @@ def _validate_assignee(assignee_type, assignee_id):
     """校验多态 assignee 目标存在。返回 (ok, error_response_or_None)。
 
     【§2.8-4】assignee_id 先 int() 兜底，避免非法类型直接进 db.session.get。
+    【scale-and-project-scope §2.6①-B / 实施发现 F2】此处**不能**只靠 `want_int`：本路径
+    有意保留 `_validate_assignee`（第 2 轮评审 R4：容忍数字串 "5"），因此 64 位硬界必须
+    在这里独立复述一次，否则超界 assignee_id 会直接绑进 SQLite → OverflowError → 500。
     """
     if assignee_type not in ASSIGNEE_TYPES:
         return False, (jsonify({"error": "invalid assignee_type",
@@ -85,10 +106,15 @@ def _validate_assignee(assignee_type, assignee_id):
     if assignee_id is None:
         return False, (jsonify({"error": "assignee_id is required"}), 400)
     try:
-        int(assignee_id)
+        numeric = int(assignee_id)
     except (TypeError, ValueError):
         return False, (jsonify({"error": "assignee_id must be an integer"}), 400)
-    target = db.session.get(User if assignee_type == "user" else Agent, int(assignee_id))
+    if numeric < MIN_DB_INT or numeric > MAX_DB_INT:
+        return False, (jsonify({
+            "error": "assignee_id is out of range",
+            "detail": {"field": "assignee_id", "expected": "integer within 64-bit range"},
+        }), 400)
+    target = db.session.get(User if assignee_type == "user" else Agent, numeric)
     if target is None:
         return False, (jsonify({"error": f"{assignee_type} not found"}), 404)
     return True, None
@@ -132,17 +158,18 @@ def check_concurrency(ticket, data):
 @bp.get("")
 @jwt_required()
 def list_requirements():
-    q = Requirement.query
-    project_id = request.args.get("project_id", type=int)
+    # 【§2.4】项目作用域：缺省=不过滤、整数=该项目、"none"=未归属；非法值经全局
+    # QueryParamError 处理器统一 400（本函数不写 try/except，见 §2.4①'）。
+    q = apply_project_filter(Requirement.query, Requirement, project_scope())
     status = request.args.get("status")
     assignee_type = request.args.get("assignee_type")
-    assignee_id = request.args.get("assignee_id", type=int)
+    # 【§2.9-G2 / 评审 R1】整数过滤参数一律走 want_query_int：畸形值不再被静默丢弃（→400），
+    # 超界值不再绑进 SQLite（此前 OverflowError → 500）。
+    assignee_id = want_query_int("assignee_id")
     # 【Phase-3 §2.6】过滤 / 检索（全部可选、AND 组合、向后兼容）。
     keyword = request.args.get("q")
     priority = request.args.get("priority")
-    reporter_id = request.args.get("reporter_id", type=int)
-    if project_id is not None:
-        q = q.filter_by(project_id=project_id)
+    reporter_id = want_query_int("reporter_id")
     if status:
         q = q.filter_by(status=status)
     if assignee_type:
@@ -192,7 +219,7 @@ def create_requirement():
         project_id=project_id,
         status="new",
         reporter_id=reporter.id if reporter else None,
-        position=_next_position(Requirement, "new"),
+        position=_next_position(Requirement, "new", project_id),
     )
     db.session.add(req)
     db.session.flush()  # 拿到 req.id 再写审计
@@ -258,9 +285,10 @@ def delete_requirement(req_id):
     Comment.query.filter_by(entity_type="requirement", entity_id=req_id).delete()
     # 【Phase-3 §5】删单一并删其通知，避免点击直达到已删单。
     Notification.query.filter_by(entity_type="requirement", entity_id=req_id).delete()
-    # §2.8-3：删除进时间线（entity_id 为普通整型，不受 FK 强制影响）。
-    Activity.log("requirement", req_id, "deleted", actor=_actor(),
-                 from_status=req.status, message=f"删除需求「{req.title}」")
+    # 【§2.7】删单一并删审计：SQLite 复用主键，残留审计会被下一张同 id 的单继承，
+    # 造成时间线串档 + 已删单标题泄露。审计的价值绑定在「单还在」这一前提上。
+    # 有意**不再**写 "deleted" 审计——该单已不存在，其审计无查看入口，且会被同批清掉。
+    Activity.query.filter_by(entity_type="requirement", entity_id=req_id).delete()
     db.session.delete(req)
     db.session.commit()
     return "", 204
@@ -290,7 +318,7 @@ def assign_requirement(req_id):
     frm = req.status
     if req.status == "new" and workflow.can_transition("requirement", "new", "assigned"):
         req.status = "assigned"
-        req.position = _next_position(Requirement, "assigned")
+        req.position = _next_position(Requirement, "assigned", req.project_id)
 
     target = db.session.get(User if assignee_type == "user" else Agent, req.assignee_id)
     name = getattr(target, "display_name", None) or getattr(target, "name", str(assignee_id))
@@ -330,9 +358,10 @@ def move_requirement(req_id):
     if frm == to:
         # 同列内拖动（Phase-2 §2.6）：带 position 则精确重排，否则落列尾。
         if index is not None:
-            _reindex_column(Requirement, to, insert_id=req.id, insert_index=index)
+            _reindex_column(Requirement, to, req.project_id,
+                            insert_id=req.id, insert_index=index)
         else:
-            req.position = _next_position(Requirement, to)
+            req.position = _next_position(Requirement, to, req.project_id)
         db.session.commit()
         return jsonify(req.to_dict()), 200
 
@@ -347,9 +376,10 @@ def move_requirement(req_id):
     req.status = to
     # Phase-2 §2.6：带 position 精确插入并重编号目标列；否则落列尾（向后兼容）。
     if index is not None:
-        _reindex_column(Requirement, to, insert_id=req.id, insert_index=index)
+        _reindex_column(Requirement, to, req.project_id,
+                        insert_id=req.id, insert_index=index)
     else:
-        req.position = _next_position(Requirement, to)
+        req.position = _next_position(Requirement, to, req.project_id)
     Activity.log("requirement", req.id, "moved", actor=_actor(),
                  from_status=frm, to_status=to,
                  message=f"状态 {frm} → {to}")
@@ -380,23 +410,25 @@ def convert_to_bug(req_id):
     data = json_body()
     title = want_str(data, "title") or f"[缺陷] {req.title}"
     severity = want_str(data, "severity", default="major", choices=SEVERITIES) or "major"
+    # 【§2.6②】非串 description（{"a":1}）绑到 Text 列 → autoflush 触 500；want_str 保证非串即 400。
+    description = want_str(data, "description", required=False, strip=False) or None
 
     reporter = current_user()
     bug = Bug(
         title=title,
-        description=data.get("description") or f"由需求 #{req.id} 转入的缺陷单。",
+        description=description or f"由需求 #{req.id} 转入的缺陷单。",
         severity=severity,
         status="open",
         project_id=req.project_id,
         related_requirement_id=req.id,
         reporter_id=reporter.id if reporter else None,
-        position=_next_position(Bug, "open"),
+        position=_next_position(Bug, "open", req.project_id),
     )
     db.session.add(bug)
 
     # 源需求恒迁移到 bug_fixing。
     req.status = "bug_fixing"
-    req.position = _next_position(Requirement, "bug_fixing")
+    req.position = _next_position(Requirement, "bug_fixing", req.project_id)
 
     db.session.flush()  # 拿 bug.id
     Activity.log("requirement", req.id, "converted", actor=_actor(),
@@ -416,6 +448,42 @@ def convert_to_bug(req_id):
 @jwt_required()  # 行级 RBAC 在 do_agent_advance 内联裁决〔R3-01〕。
 def agent_advance_requirement(req_id):
     return do_agent_advance("requirement", Requirement, req_id)
+
+
+def _no_action_409(exc):
+    """「该 Agent 在此状态无动作」的 409 契约体。稳定错误串，勿更名（CLAUDE.md §五）。"""
+    return jsonify({"error": "agent has no action for this state",
+                    "detail": {"kind": exc.kind, "status": exc.status}}), 409
+
+
+def _advance_with_handoff(entity, ticket, agent):
+    """推进一步；本 Agent 无动作时先交接给对口 Agent 再重试**一次**（§2.2③，无循环）。
+
+    这样存量卡死单（generic@in_development、seed 的 qa@fixing）一次点击即可复活。
+
+    Args:
+        entity: "requirement" | "bug"。
+        ticket: 目标工单（状态迁移由 advance_one 经 workflow 裁决，本函数不碰状态机）。
+        agent: 当前 assignee 对应的 Agent。
+
+    Returns:
+        (to, comment, agent, None)：推进成功，`agent` 是**实际执行本步**的 Agent（可能已易主）；
+        (None, None, None, response)：仍无对口 Agent，`response` 为契约不变的 409。
+    """
+    try:
+        to, comment, _activity = agent_runner.advance_one(entity, ticket, agent)
+        return to, comment, agent, None
+    except agent_runner.NoAgentAction as e:
+        handed = agent_autopilot.maybe_handoff(entity, ticket)
+        if handed is None:
+            return None, None, None, _no_action_409(e)
+    db.session.commit()              # 交接本身即为可持久化的进展
+    try:
+        to, comment, _activity = agent_runner.advance_one(entity, ticket, handed)
+    except agent_runner.NoAgentAction as e2:
+        # 交接已落库（净进展），但新 Agent 仍无动作 → 仍返 409，契约不变。
+        return None, None, None, _no_action_409(e2)
+    return to, comment, handed, None
 
 
 def do_agent_advance(entity, model, ticket_id):
@@ -443,16 +511,17 @@ def do_agent_advance(entity, model, ticket_id):
 
     # —— 单步（【R-04】同步单事务，终态即 idle，不写不可观测的 busy）——
     frm = ticket.status
-    try:
-        to, comment, activity = agent_runner.advance_one(entity, ticket, agent)
-    except agent_runner.NoAgentAction as e:
-        return jsonify({"error": "agent has no action for this state",
-                        "detail": {"kind": e.kind, "status": e.status}}), 409
+    to, comment, agent, err = _advance_with_handoff(entity, ticket, agent)
+    if err is not None:
+        return err
     db.session.commit()
     # 【Phase-3 §2.3】在 advance_one 外层扇出（不侵入其本体），通知 reporter / 人类 assignee。
     notifications.notify_advance(ticket, entity, actor=("agent", agent.id),
                                  from_status=frm, to_status=to)
     db.session.commit()
+    # —— 推进成功后即时交接，使下一次点击由对口 Agent 接力（与 autopilot 同策略）——
+    if agent_autopilot.maybe_handoff(entity, ticket) is not None:
+        db.session.commit()
     return jsonify({
         "ticket": ticket.to_dict(),
         "comment": comment.to_dict(),
@@ -474,8 +543,11 @@ def _agent_run_all(entity, ticket, agent):
         for _ in range(agent_runner.MAX_AGENT_STEPS):
             frm = ticket.status
             try:
-                to, comment, activity = agent_runner.advance_one(entity, ticket, agent)
+                to, comment, _activity = agent_runner.advance_one(entity, ticket, agent)
             except agent_runner.NoAgentAction:
+                # 【§2.2③】卡住时先交接给对口 Agent（本次 run 到此为止，由下次调用接力）。
+                if agent_autopilot.maybe_handoff(entity, ticket) is not None:
+                    db.session.commit()
                 break
             db.session.commit()
             steps.append({"to_status": to, "comment": comment.to_dict()})
@@ -485,7 +557,18 @@ def _agent_run_all(entity, ticket, agent):
             db.session.commit()
             if workflow.is_terminal(entity, ticket.status):
                 break
+            # 【§2.2③】交接后必须 break：busy 软锁 prev 只锁住**原** Agent，finally 也只恢复它。
+            # 若换人后继续跑，新 Agent 未被加锁，会与 /autorun 并发撞车。与 autopilot.autorun 一致。
+            if agent_autopilot.maybe_handoff(entity, ticket) is not None:
+                db.session.commit()
+                break
     finally:
+        # 【§2.9-G3】先回滚可能的半提交事务，否则 commit 自身抛 PendingRollbackError，
+        # 软锁恢复丢失 → Agent 永久 busy（此后每次 autorun/tick/run=all 都 409）。
+        try:
+            db.session.rollback()
+        except Exception:  # pragma: no cover - 回滚失败仅可能掩盖原异常，不再抛出
+            pass
         agent.status = prev
         db.session.commit()
     return jsonify({

@@ -320,3 +320,46 @@ npm run build        # next build → 成功
 ```
 
 更多设计细节见 [`docs/plans/feature-completeness/spec.md`](docs/plans/feature-completeness/spec.md)。
+
+---
+
+## 规模化可用与项目维度贯通（Scale & Project Scope）—— 数据一多翻得到、项目建了用得上、工单页也推得动 Agent
+
+第 3 轮做四件事：让列表在**数据变多**时仍然可达，让**项目**这一维度从数据库一路贯通到每一个页面，让**工单页**和 Agents 页拥有同样完整的 Agent 闭环，让剩下的每一个 500 与每一处「静默说谎」的 UI 归零。零新表、零新运行时依赖、成功路径响应 shape 全部不变。
+
+- **工单级 Agent 闭环补完 + 交接泛化**：`agent_autopilot.maybe_handoff` 从「dev→qa 单向硬编码」升级为**由 `agent_runner.AGENT_FORWARD` 键集派生**的「按状态找对口 kind」（单一真相、零漂移；多解状态不交接），并接进工单级 `POST /:entity/:id/agent-advance` 与 `?run=all`。抽屉里连点「▶ 让 … 处理下一步」不再在 `testing` 永久 409，而是自动交接给 qa 并推到 `reviewing`；存量卡死单（generic 泊在 `in_development`、seed 的 qa-agent 持 `fixing`）一次点击即复活。**交接绝不从人类手里抢单，也绝不交给 offline Agent。**
+- **generic Agent 定位收窄**：`generic` 不再参与自主认领（它在 `AGENT_FORWARD` 里只有 `assigned` 一条边，认领后必然泊死）；仍可被 pm **显式指派**、推进一步，随后由泛化交接转给对口 kind。`claim-next` 对 generic 恒返回 `{"claimed": null}` + 200（契约不变），并补上 busy/offline 门禁（此前离线 Agent「吞了单又拒绝干活」）。
+- **列表分页可用**：需求 / BUG / 通知三页接上受控分页条（`?limit/offset` + `X-Total-Count`，`keepPreviousData` 消除翻页闪烁）。此前标题写着「共 137 条」表格却只有 50 行且没有任何翻页控件，第 51 条起在列表视图**永远不可达**。数据量 ≤ 一页时分页条不渲染，小库观感零变化。
+- **项目维度端到端贯通**：Header 新增**全局项目切换器**（`localStorage` 持久化 + 失效自愈），贯通需求 / BUG 列表与看板、仪表盘、建单表单（默认继承当前作用域）、工单抽屉（显示所属项目）、项目页（行可点击 → 切作用域并跳转）。后端新增共享 `services/scope.py` 统一 `?project_id=` 语义：**缺省 = 不过滤、整数 = 该项目、字面量 `none` = 未归属（`IS NULL`）**，`/api/stats` 亦支持之（`_by_status` 改 SQL `GROUP BY`）。**不受作用域约束的视图（通知、全局搜索、我的工作、Agent 负载、最近活动）一律带可见标注**，绝不让 UI 在用户不知情时说与事实不符的话。
+- **看板 `position` 的项目隔离**：`_next_position` / `_reindex_column`（含 `agent_runner` 的内联副本）改为**按「同项目同状态」编号**，`project_id` 为无默认值的必填参数（漏传即 `TypeError`，不容许静默错数据）。此前在项目 B 的看板里拖卡会把索引套在含项目 A 卡片的全列上——拖了、成功了、什么都没变。
+- **剩余的真 500 清零（三点式收口）**：超界整型有三条互相独立的路径，各自收口——**URL 路径**经 `app.py::BoundedIntConverter` → **404**；**请求体**经 `want_int` 的无条件 64 位硬界 → **400**；**查询串**（`?limit/offset/assignee_id/reporter_id/project_id`）经 `services/scope.py::want_query_int` + `errors.py` 的 `QueryParamError` 全局处理器 → **400**。另补四处未校验的 `description`、`key`/`name`/`username`/`email` 的 `max_len` 与邮箱格式，并给 `/users`、`/agents`、`/projects` 三个列表补上分页与 `X-Total-Count`（响应体仍是裸数组，契约不变）。
+- **删单不再串档**：删除工单时**一并删除其审计行**。SQLite 复用主键，残留审计会被下一张同 id 的单继承——既是错数据，也是已删单标题的信息泄露。副作用：`/stats.activities_this_week` 相应下降（更正确的语义）。
+- **消灭「静默说谎」的 UI**：看板拖拽按后端同判据（新增 `lib/permissions.ts::canManageTicket`）逐卡门禁，403 文案中文化；铃铛与通知页**双向**同步已读；铃铛下拉与通知偏好卡补错误态（此前分别是「永久转圈」与「六个开关全画成开并锁死」）；看板「写成功但重取失败」不再谎报「已回滚」；触屏误触不可逆的「转 BUG」由 `pointer-events` 真正屏蔽。
+
+### 接口语义变更一览（成功路径 shape 全部不变）
+
+| 端点 | 变更 |
+|---|---|
+| `GET /api/requirements`、`/api/bugs`、`/api/board/*` | `?project_id=` 新增 `none` = 仅未归属；整数与缺省行为不变 |
+| `GET /api/stats` | 新增可选 `?project_id=`；`agents.*` / `members` / `activities_this_week` / `recent_activities` **有意保持全局** |
+| 全部 `<int:id>` 路由 | 超界 id 由 `500` 改为 **404** |
+| 全部列表端点的查询串整型参数 | 超界由 `500` 改为 **400**；`offset` 为负由静默归零改为 **400**；`limit` 的钳制语义（`[1,200]`）不变 |
+| `POST /api/projects`、`POST/PATCH /api/agents`、`convert-to-bug` | 非串 `description` 由 `500` 改为 **400**；超长 `key`/`name`/`username`/`email` 由 `201` 改为 **400** |
+| `POST /api/agents/:id/claim-next` | busy / offline Agent 由 `200` 改为 **409** |
+| `GET /api/users`、`/api/agents`、`/api/projects` | 新增 `X-Total-Count` + `limit`/`offset`（响应体仍是裸数组） |
+| `GET /api/bugs/:id/activities` | **新增**（与需求侧对称） |
+| `DELETE /api/requirements/:id`、`/api/bugs/:id` | 级联新增删除审计行；仍返 204 |
+
+### 质量门禁
+
+```powershell
+cd backend
+pytest -q            # ≥275 用例全绿（新增项目作用域 / 统计契约 / 三点式 500 清零 / 交接泛化用例）
+```
+```
+cd frontend
+npm run typecheck    # tsc --noEmit → 0 error
+npm run build        # next build → 16/16 页成功
+```
+
+更多设计细节见 [`docs/plans/scale-and-project-scope/spec.md`](docs/plans/scale-and-project-scope/spec.md)。

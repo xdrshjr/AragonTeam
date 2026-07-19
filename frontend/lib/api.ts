@@ -6,6 +6,18 @@ const API_BASE =
 
 const TOKEN_KEY = "aragon_token";
 
+/** `/projects` 的唯一 SWR key。ProjectScopeProvider 与 projects 页必须共用它，
+ *  否则两份缓存互不失效：新建项目后切换器下拉里看不到它（scale-and-project-scope 评审 R4）。
+ *  值里的 `limit=200`（= 后端 MAX_LIMIT）对应 §2.9-G1 给 /projects 加的分页，
+ *  避免默认 50 条上限静默截断项目列表。 */
+export const PROJECTS_KEY = "/projects?limit=200";
+
+/** `/users` 的唯一 SWR key（同 PROJECTS_KEY 的理由；G1 后须显式传 limit 防 50 条截断）。 */
+export const USERS_KEY = "/users?limit=200";
+
+/** `/agents` 的唯一 SWR key（同上）。 */
+export const AGENTS_KEY = "/agents?limit=200";
+
 export class ApiError extends Error {
   status: number;
   detail?: unknown;

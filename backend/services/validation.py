@@ -11,6 +11,12 @@ from typing import Optional, Iterable
 from flask import request
 
 
+# SQLite / 多数 RDBMS 的 INTEGER 值域（64 位有符号）。与 services/scope.py 的同名常量
+# **有意各自定义**（两者互不依赖，都是叶子边界模块），数值必须一致——测试断言其相等防漂移。
+_MIN_DB_INT = -(2 ** 63)
+_MAX_DB_INT = 2 ** 63 - 1
+
+
 class ValidationError(Exception):
     """边界校验失败 → 由 errors.py 统一渲染为 400。稳定异常类，勿更名（对外错误契约）。"""
 
@@ -80,6 +86,9 @@ def want_int(data: dict, key: str, *, required: bool = False, default: Optional[
     """从 data 取一个整数字段；类型错误抛 ValidationError（→ 400）。
 
     不接受数字字符串（JSON 体应传数字）；bool 是 int 子类，显式排除。
+
+    不变量（scale-and-project-scope §2.6①-B / 评审 R6）：64 位硬界**无条件**生效，
+    调用方的 minimum/maximum 只能在其内部再收窄、不能放宽——故硬界**不经形参暴露**。
     """
     v = data.get(key, None)
     if v is None:
@@ -88,6 +97,10 @@ def want_int(data: dict, key: str, *, required: bool = False, default: Optional[
         return default
     if isinstance(v, bool) or not isinstance(v, int):
         raise ValidationError(f"{key} must be an integer", field=key, expected="integer")
+    # 【§2.6①-B】64 位硬界：超出即不可能是任何主键，且绑进 SQLite 会 OverflowError → 500。
+    if v < _MIN_DB_INT or v > _MAX_DB_INT:
+        raise ValidationError(f"{key} is out of range", field=key,
+                              expected="integer within 64-bit range")
     if minimum is not None and v < minimum:
         raise ValidationError(f"{key} is out of range", field=key, expected=f">={minimum}")
     if maximum is not None and v > maximum:

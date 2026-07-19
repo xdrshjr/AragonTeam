@@ -55,11 +55,12 @@ def me():
 @require_role("admin")
 def register():
     # 【§2.2】非串 username/display_name → 400（此前 .strip() 500）；role 走 choices 归一。
+    # 【§2.6③】max_len 对齐 models/user.py 列宽（username String(64) / display_name String(128)）。
     data = json_body()
-    username = want_str(data, "username")
+    username = want_str(data, "username", max_len=64)
     password = want_str(data, "password", strip=False)
     role = want_str(data, "role", default="member", choices=ROLES)
-    display_name = want_str(data, "display_name") or username
+    display_name = want_str(data, "display_name", max_len=128) or username
     # 【§2.4-C2】非串 email（{"x":1}）绑到 String 列 → commit 触 InterfaceError 500；
     # want_str 保证非串即 400。缺省/空 → None（保持既有宽松语义，格式校验仍只在 me.py 自助改资料处）。
     email = want_str(data, "email", required=False) or None

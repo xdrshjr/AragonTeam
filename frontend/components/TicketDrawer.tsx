@@ -6,6 +6,8 @@ import { ApiError } from "@/lib/api";
 import { useToast } from "@/lib/toast";
 import { useAuth } from "@/lib/auth";
 import { useTicket } from "@/hooks/useTicket";
+import { canManageTicket } from "@/lib/permissions";
+import { useProjectScope } from "@/lib/project-scope";
 import type { Requirement, Bug, Priority, Severity } from "@/lib/types";
 import { statusStyle, PRIORITY_STYLES, SEVERITY_STYLES } from "@/lib/constants";
 import Badge from "@/components/ui/Badge";
@@ -50,6 +52,7 @@ export default function TicketDrawer({ entity, id, onClose, onChanged }: Props) 
   const router = useRouter();
   const toast = useToast();
   const { user } = useAuth();
+  const { projects } = useProjectScope();
   const isBug = entity === "bugs";
   const {
     ticket, feed, isLoading, error: ticketError,
@@ -125,14 +128,10 @@ export default function TicketDrawer({ entity, id, onClose, onChanged }: Props) 
     assignee_id: ticket?.assignee_id ?? null,
   };
 
-  // 【§2.7-C1】写操作门禁：后端仍是权威，前端仅收敛「可见即可用」，判据与后端
-  // can_manage_ticket（reporter / 人类 assignee / pm / admin）逐字对齐，避免无权成员点出 403。
+  // 【§2.7-C1】写操作门禁：后端仍是权威，前端仅收敛「可见即可用」，避免无权成员点出 403。
+  // 判据统一走 lib/permissions（与看板拖拽门禁共用，**不得**在此再内联一份——两份会漂移）。
   const canAssign = user?.role === "admin" || user?.role === "pm";
-  const canManage =
-    canAssign ||
-    (!!ticket && !!user &&
-      (ticket.reporter_id === user.id ||
-        (ticket.assignee_type === "user" && ticket.assignee_id === user.id)));
+  const canManage = canManageTicket(user, ticket ?? null);
 
   const canAdvance = ticket?.assignee_type === "agent" && canManage;
   const canConvert =
@@ -359,6 +358,14 @@ export default function TicketDrawer({ entity, id, onClose, onChanged }: Props) 
                     负责人：
                     <AssigneeAvatar assignee={ticket.assignee} size={18} />
                     {ticket.assignee ? ticket.assignee.name : "未指派"}
+                  </span>
+                  {/* 【§2.4⑦】显示所属项目：此前抽屉里完全看不到工单归属哪个项目。 */}
+                  <span>
+                    项目：
+                    {ticket.project_id == null
+                      ? "未归属"
+                      : projects?.find((p) => p.id === ticket.project_id)?.name ??
+                        `#${ticket.project_id}`}
                   </span>
                   <span>创建：{shortTime(ticket.created_at)}</span>
                   <span>更新：{shortTime(ticket.updated_at)}</span>

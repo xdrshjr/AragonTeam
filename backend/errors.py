@@ -12,6 +12,7 @@ from flask import jsonify
 from werkzeug.exceptions import HTTPException
 
 from extensions import db
+from services.scope import QueryParamError
 from services.validation import ValidationError
 
 log = logging.getLogger("aragon.errors")
@@ -30,6 +31,16 @@ def register_error_handlers(app, jwt):
         if e.field is not None:
             body["detail"] = {"field": e.field, "expected": e.expected}
         return jsonify(body), 400
+
+    # —— 查询串边界失败（scale-and-project-scope §2.4①'）：统一 400 ——
+    # 必须走**全局**处理器而非逐路由 try/except：paginate() 被每一个列表端点调用，
+    # 逐路由捕获一旦漏掉一处，该处的超界 ?offset= 就仍然 500。
+    @app.errorhandler(QueryParamError)
+    def handle_query_param_error(e: QueryParamError):
+        return jsonify({
+            "error": f"invalid {e.field}",
+            "detail": {"field": e.field, "expected": e.expected, "got": str(e.got)},
+        }), 400
 
     # —— 兜底 500：记录日志但不泄露堆栈 ——
     @app.errorhandler(Exception)

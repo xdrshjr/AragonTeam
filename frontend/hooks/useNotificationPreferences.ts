@@ -48,6 +48,8 @@ export function useNotificationPreferences() {
     preferences: data?.preferences ?? null,
     loading: isLoading,
     error,
+    // 【§2.8④】供卡片的错误态重试（此前只暴露 error，调用方无从重试）。
+    refresh: mutate,
     setPreference,
   };
 }
