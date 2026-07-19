@@ -1,37 +1,35 @@
 "use client";
 
+import { useState } from "react";
 import useSWR from "swr";
-import { api, swrFetcher, ApiError } from "@/lib/api";
-import { useToast } from "@/lib/toast";
+import { swrFetcher } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import type { User, Role } from "@/lib/types";
+import type { User } from "@/lib/types";
 import { ROLE_LABELS } from "@/lib/constants";
 import Header from "@/components/layout/Header";
+import Button from "@/components/ui/Button";
 import Avatar from "@/components/ui/Avatar";
-
-const ROLE_OPTIONS: Role[] = ["admin", "pm", "member"];
+import MemberFormModal, { MemberFormState } from "@/components/admin/MemberFormModal";
 
 export default function TeamPage() {
-  const toast = useToast();
   const { user: me } = useAuth();
   const { data: users, mutate } = useSWR<User[]>("/users", swrFetcher);
   const isAdmin = me?.role === "admin";
-
-  async function changeRole(u: User, role: Role) {
-    try {
-      await api.patch(`/users/${u.id}`, { role });
-      toast.success(`已将 ${u.display_name || u.username} 设为${ROLE_LABELS[role]}`);
-      mutate();
-    } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "修改失败");
-    }
-  }
+  // 建 / 改 / 重置密码三态弹窗（后端写接口限 admin，member 隐藏所有写入口）。
+  const [editing, setEditing] = useState<MemberFormState | null>(null);
 
   return (
     <>
       <Header
         title="团队"
         subtitle={isAdmin ? "管理成员与角色" : "团队成员一览"}
+        action={
+          isAdmin ? (
+            <Button size="sm" onClick={() => setEditing({ mode: "create" })}>
+              + 新增成员
+            </Button>
+          ) : undefined
+        }
       />
       <main className="flex-1 overflow-y-auto p-6">
         <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-card">
@@ -42,6 +40,7 @@ export default function TeamPage() {
                 <th className="px-4 py-3 font-medium">用户名</th>
                 <th className="px-4 py-3 font-medium">邮箱</th>
                 <th className="px-4 py-3 font-medium">角色</th>
+                {isAdmin && <th className="px-4 py-3 font-medium text-right">操作</th>}
               </tr>
             </thead>
             <tbody>
@@ -57,23 +56,21 @@ export default function TeamPage() {
                   </td>
                   <td className="px-4 py-3 text-ink-muted">{u.username}</td>
                   <td className="px-4 py-3 text-ink-muted">{u.email || "—"}</td>
-                  <td className="px-4 py-3">
-                    {isAdmin ? (
-                      <select
-                        value={u.role}
-                        onChange={(e) => changeRole(u, e.target.value as Role)}
-                        className="h-8 rounded-lg border border-border bg-surface px-2 text-sm text-ink focus:border-clay focus:outline-none focus:ring-2 focus:ring-clay/20"
-                      >
-                        {ROLE_OPTIONS.map((r) => (
-                          <option key={r} value={r}>
-                            {ROLE_LABELS[r]}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <span className="text-ink">{ROLE_LABELS[u.role]}</span>
-                    )}
-                  </td>
+                  <td className="px-4 py-3 text-ink">{ROLE_LABELS[u.role]}</td>
+                  {isAdmin && (
+                    <td className="px-4 py-3">
+                      <div className="flex justify-end gap-2">
+                        <Button variant="ghost" size="sm"
+                                onClick={() => setEditing({ mode: "edit", user: u })}>
+                          编辑
+                        </Button>
+                        <Button variant="ghost" size="sm"
+                                onClick={() => setEditing({ mode: "reset", user: u })}>
+                          重置密码
+                        </Button>
+                      </div>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -81,10 +78,19 @@ export default function TeamPage() {
         </div>
         {!isAdmin && (
           <p className="mt-3 text-xs text-ink-muted">
-            仅管理员可修改成员角色。
+            仅管理员可新增成员、修改资料与角色。
           </p>
         )}
       </main>
+
+      <MemberFormModal
+        state={editing}
+        onClose={() => setEditing(null)}
+        onSaved={() => {
+          setEditing(null);
+          mutate();
+        }}
+      />
     </>
   );
 }

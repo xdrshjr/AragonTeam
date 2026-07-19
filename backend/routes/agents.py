@@ -65,13 +65,25 @@ def get_agent(agent_id):
 
 
 @bp.patch("/<int:agent_id>")
-@jwt_required()
+@require_role("admin", "pm")   # 收紧：原 @jwt_required() 任意成员可改共享 Agent → 与 POST 对齐（有意契约变更）
 def patch_agent(agent_id):
     agent = db.session.get(Agent, agent_id)
     if agent is None:
         return jsonify({"error": "agent not found"}), 404
     data = request.get_json(silent=True) or {}
 
+    if "name" in data:                                   # 新增：支持改名（编辑 Agent 的核心）
+        name = (data.get("name") or "").strip()
+        if not name:
+            return jsonify({"error": "name is required"}), 400
+        if Agent.query.filter(Agent.name == name, Agent.id != agent.id).first():
+            return jsonify({"error": "agent name already exists"}), 409
+        agent.name = name
+    if "kind" in data:                                   # 新增：支持改类型
+        if data["kind"] not in AGENT_KINDS:
+            return jsonify({"error": "invalid kind",
+                            "detail": {"allowed": list(AGENT_KINDS)}}), 400
+        agent.kind = data["kind"]
     if "status" in data:
         if data["status"] not in AGENT_STATUSES:
             return jsonify({"error": "invalid status",

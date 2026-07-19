@@ -20,6 +20,7 @@ import { AGENT_KIND_LABELS, AGENT_STATUS_LABELS, actionLabel, autopilotSummary }
 import Header from "@/components/layout/Header";
 import Button from "@/components/ui/Button";
 import Avatar from "@/components/ui/Avatar";
+import AgentFormModal, { AgentFormState } from "@/components/admin/AgentFormModal";
 
 const STATUS_DOT: Record<string, string> = {
   idle: "#3E7A4F",
@@ -40,6 +41,8 @@ export default function AgentsPage() {
   const canOrchestrate = user?.role === "admin" || user?.role === "pm";
   const [busyId, setBusyId] = useState<number | null>(null);
   const [teamBusy, setTeamBusy] = useState(false);
+  // 建 / 改 Agent 弹窗（后端 POST/PATCH 限 pm/admin，member 隐藏所有写入口）。
+  const [form, setForm] = useState<AgentFormState | null>(null);
 
   // 自主运行后刷新看板 / 列表 / Agent / 仪表盘 / 未读数。
   function revalidateAll() {
@@ -140,9 +143,14 @@ export default function AgentsPage() {
         subtitle="AI 执行者 · 可被指派需求与 BUG 的一等公民"
         action={
           canOrchestrate ? (
-            <Button size="sm" onClick={onRunTeam} disabled={teamBusy}>
-              {teamBusy ? "运行中…" : "▶ 运行 AI 团队一轮"}
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="ghost" onClick={() => setForm({ mode: "create" })}>
+                + 新建 Agent
+              </Button>
+              <Button size="sm" onClick={onRunTeam} disabled={teamBusy}>
+                {teamBusy ? "运行中…" : "▶ 运行 AI 团队一轮"}
+              </Button>
+            </div>
           ) : undefined
         }
       />
@@ -202,6 +210,10 @@ export default function AgentsPage() {
                     <Button size="sm" variant="ghost" onClick={() => onAutorun(a)} disabled={running}>
                       运行队列
                     </Button>
+                    {/* 编辑不受 busy 锁限制：busy 时编辑弹窗可切到空闲以安全解锁（§2.3 C1）。 */}
+                    <Button size="sm" variant="ghost" onClick={() => setForm({ mode: "edit", agent: a })}>
+                      编辑
+                    </Button>
                   </div>
                 )}
 
@@ -230,6 +242,15 @@ export default function AgentsPage() {
           )}
         </div>
       </main>
+
+      <AgentFormModal
+        state={form}
+        onClose={() => setForm(null)}
+        onSaved={() => {
+          setForm(null);
+          mutate("/agents");
+        }}
+      />
     </>
   );
 }

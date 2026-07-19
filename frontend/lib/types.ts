@@ -281,3 +281,38 @@ export interface SearchResults {
   bugs: Bug[];
   counts: { requirements: number; bugs: number };
 }
+
+// —— admin-console：管理台写操作载荷型 ——
+// 薄载荷型，供三态弹窗 props 与 api 调用；键集合与后端受理字段逐一对齐。
+
+// POST /api/users（admin）——建成员。
+export interface UserCreate {
+  username: string;
+  password: string;
+  role: Role;
+  display_name?: string;
+  email?: string;
+}
+
+// PATCH /api/users/:id（admin）——改资料 / 角色 / 重置密码；仅提供的键才更新。
+export interface UserUpdate {
+  display_name?: string;
+  email?: string;
+  role?: Role;
+  password?: string;
+}
+
+// POST /api/agents（新建）与 PATCH /api/agents/:id（编辑）共用；键均可选，按模式取子集。
+export interface AgentInput {
+  name?: string;
+  kind?: AgentKind;
+  status?: AgentStatus;
+  description?: string;
+}
+
+// POST /api/projects（pm/admin）——新建项目。
+export interface ProjectCreate {
+  name: string;
+  key: string;
+  description?: string;
+}
