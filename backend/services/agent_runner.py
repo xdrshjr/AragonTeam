@@ -7,8 +7,11 @@
   2) 以 Agent 身份留一条工作说明评论；
   3) 写一条 actor_type=agent 的审计记录。
 
-**确定性离线模拟**：不依赖外部 LLM（可单测、无网络抖动），未来接真实 Agent
-只需替换本模块 `advance_one` 内部的动作生成，接口 / 数据模型 / 前端均不变。
+**确定性回退 + 可选真实 LLM**（real-agent-execution）：评论正文由
+`agent_executor.generate_work` 提供——配置了模型凭据时调用真实 LLM 产出实质工作产物；
+未配置 / 测试 / 调用失败一律优雅降级到下方 `AGENT_FORWARD` 的确定性模板文案。
+**状态迁移目标仍完全由 `AGENT_FORWARD` + `workflow` 裁决，LLM 只产内容、绝不决定流转**；
+接口 / 数据模型 / 前端 / 审计短句均不变。
 
 【R-04】单步推进为同步单事务，Agent 已提交终态恒为 idle；`busy` 只在
 `run=all`（逐步 commit）下才产生可观测窗口，故本模块不在单步内切 busy。
@@ -16,7 +19,7 @@
 from extensions import db
 from models.comment import Comment
 from models.activity import Activity
-from services import workflow
+from services import workflow, agent_executor
 
 # run=all 连续推进的硬上限，防死循环（§7 风险表）。
 MAX_AGENT_STEPS = 6
@@ -90,15 +93,24 @@ def advance_one(entity: str, ticket, agent):
         )
 
     frm = ticket.status
+
+    # 【P1-1 / 放行条件 C1】先产出正文：generate_work 只读 feed + 可选 LLM。此刻 session
+    # 无挂起写，feed 查询不会 autoflush 出任何 UPDATE，故 LLM 全程不持有 SQLite 写锁；
+    # LLM 未启用 / 失败 / 空返回一律降级回 message（模板），恒返回非空正文（见 agent_executor）。
+    body = agent_executor.generate_work(
+        entity, ticket, agent, to, fallback_message=message)
+
+    # 产出完成后再改状态、建评论——写事务窗口收敛到 commit 前的亚毫秒区间。
     ticket.status = to
     ticket.position = _next_position(type(ticket), to)
 
     comment = Comment(
         entity_type=entity, entity_id=ticket.id,
-        author_type="agent", author_id=agent.id, body=message,
+        author_type="agent", author_id=agent.id, body=body,
     )
     db.session.add(comment)
 
+    # 审计仍记简短动作短句（保持时间线可断言、审计干净），丰富内容进入评论正文。
     activity = Activity.log(
         entity, ticket.id, "agent_advanced", actor=("agent", agent.id),
         from_status=frm, to_status=to, message=message,

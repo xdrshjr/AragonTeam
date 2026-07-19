@@ -12,6 +12,7 @@ from config import Config
 from extensions import db, jwt
 from errors import register_error_handlers
 from observability import init_observability
+from services import llm
 
 
 def create_app(config_class=Config):
@@ -51,6 +52,9 @@ def create_app(config_class=Config):
             "status": "ok" if db_ok else "error",
             "service": "aragonteam-backend",
             "db": "ok" if db_ok else "error",
+            # real-agent-execution §5.1：只读 additive 块，反映 Agent 真实执行是否启用；
+            # 从不回传密钥。未配置时 {enabled:false, provider:"none", model:null}。
+            "llm": llm.describe(),
         }
         return jsonify(payload), 200 if db_ok else 503
 
@@ -71,4 +75,6 @@ app = create_app()
 
 if __name__ == "__main__":
     # 关闭 reloader 避免 seed / create_all 重复执行两次进程。
-    app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)
+    # threaded=True：单个（可能较慢的）LLM 请求阻塞期间不拖垮健康探针 / 并发请求
+    # （real-agent-execution §3.8）；配合「改状态前调 LLM」的写锁收敛，并发写不再被阻塞。
+    app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False, threaded=True)

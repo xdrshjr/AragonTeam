@@ -12,11 +12,13 @@
 软锁（busy）与 commit 节奏由 routes/agents.py 编排（与 Phase-2 run=all 的 busy 语义一致）；
 本模块专注「推进哪些单、推几步、扇出通知」，认领 / 每步各自可提交。
 """
+import time
+
 from extensions import db
 from models.requirement import Requirement
 from models.bug import Bug
 from models.activity import Activity
-from services import workflow, agent_runner, notifications
+from services import workflow, agent_runner, notifications, agent_executor
 
 # 单个 Agent 一次 autorun 的全局步数兜底（防长循环，§7 风险表）。
 MAX_AUTOPILOT_STEPS = 24
@@ -86,12 +88,19 @@ def autorun(agent, run_all=False):
     advanced = []
     skipped = []
     total_steps = 0
+    # 【P2-1】LLM 活跃时的墙钟预算：累计 LLM 墙钟超预算 → 其余单以 reason="budget" 跳过。
+    # 离线 / 测试 / 未配置恒 None（预算永不触发），故本判定对既有行为逐字节不变。
+    budget = agent_executor.wall_budget_seconds()
+    started = time.monotonic()
 
     for entity in ("requirement", "bug"):
         model = _MODELS[entity]
         tickets = model.query.filter_by(assignee_type="agent", assignee_id=agent.id)\
             .order_by(model.id.asc()).all()
         for ticket in tickets:
+            if _over_budget(budget, started):
+                skipped.append({"entity": entity, "id": ticket.id, "reason": "budget"})
+                continue
             steps_this = 0
             while True:
                 if total_steps >= MAX_AUTOPILOT_STEPS:
@@ -151,3 +160,8 @@ _LABELS = {"requirement": "需求", "bug": "BUG"}
 
 def _label(entity: str) -> str:
     return _LABELS.get(entity, entity)
+
+
+def _over_budget(budget, started) -> bool:
+    """墙钟预算是否已耗尽（`budget=None` 恒 False，离线 / 未启用不受影响，§3.8 P2-1）。"""
+    return budget is not None and (time.monotonic() - started) >= budget

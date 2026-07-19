@@ -1,8 +1,11 @@
-"""幂等 seed（§2.2 D）——首次启动填充 mock 数据，保证前端开箱即用。
+"""幂等 seed（§2.2 D）——首次启动填充**示例种子数据**，保证前端开箱即用。
+
+注意（real-agent-execution §0 M3）：这里是**演示用示例种子**（账号 / Agent / 工单），
+由 `SEED_ON_STARTUP` 门控、测试环境已关闭，**并非业务 Mock**（唯一的业务 Mock 是
+Agent 执行引擎，已由本迭代真实化）。
 
 幂等策略：先判 User.query.count() == 0 再插（【§7 seed 非幂等风险】）。
-覆盖各状态列，便于看板一启动就有内容。
-口令统一 pbkdf2:sha256（【R-06】）。
+覆盖各状态列，便于看板一启动就有内容。口令统一 pbkdf2:sha256（【R-06】）。
 """
 from extensions import db
 from models.user import User
@@ -19,7 +22,7 @@ _COLORS = ["#C15F3C", "#3B6EA5", "#6E8B3D", "#8A5A9B", "#C99A2E", "#4B8B8B"]
 
 
 def seed_if_empty():
-    """若 users 表为空则填充 mock 数据；否则跳过（幂等）。"""
+    """若 users 表为空则填充示例种子数据；否则跳过（幂等）。"""
     if User.query.count() > 0:
         return False
 

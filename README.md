@@ -204,3 +204,50 @@ concurrency / search，并扩充 rbac）。前端 `tsc --noEmit` 0 error、`next
 > `agent-advance` 现为 403）。这是**明示的契约变更**，非「零变更」。
 
 Phase-3 设计与验收细节见 [`docs/plans/aragonteam-phase3/spec.md`](docs/plans/aragonteam-phase3/spec.md)。
+
+---
+
+## 真实 Agent 执行引擎（Real Agent Execution）—— 去 Mock
+
+在 Phase-3 之上把平台**唯一**的业务 Mock（Agent 执行引擎）真实化：此前指派给 Agent 的工单
+被推进时只写一句**固定罐头文案**，Agent 并未真正「读需求、想实现、写测试」。本迭代在
+`agent_runner.advance_one` 这一**唯一接缝**处接入**真实 LLM 执行层**——dev-agent / qa-agent
+推进每一步时会真正调用大模型，读取工单标题 / 描述 / 最近讨论，产出**该步骤的真实工作产物**
+（需求拆解与实现要点、测试计划与用例、缺陷根因与修复摘要等），写入协作时间线。
+
+- **状态机仍是圣域**：迁移目标**完全**由 `AGENT_FORWARD` + `workflow.can_transition` 裁决，
+  LLM 只产「内容」、绝不决定「流转到哪」。
+- **有凭据则真、无凭据则稳（双模）**：未配置凭据 / 测试环境 / 调用失败 / 返回空 / 响应异形——
+  **任一情况都优雅降级**回既有确定性模板，工单照常推进、流程绝不中断、**绝不冒泡成 5xx**。
+  默认（不设任何 `AGENT_LLM_*`）即今日行为，**开箱即用、升级无感**。
+- **零新依赖、零 schema 变更**：LLM 调用仅用标准库 `urllib`；产物写入既有 `Comment.body`，
+  溯源信息（provider / model / latency / 降级因）进结构化日志，不落库。
+- **可观测**：`GET /api/health` 新增只读 `llm` 块（`{enabled, provider, model}`，**从不回传密钥**）。
+
+### 环境变量（`AGENT_LLM_*`，全部有默认值 → 未设即离线模式）
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `AGENT_LLM_PROVIDER` | `none` | `anthropic` / `openai` / `none`；`none` = 离线（用确定性文案）|
+| `AGENT_LLM_API_KEY` | 空（回落 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`）| 模型凭据；为空即离线 |
+| `AGENT_LLM_MODEL` | `claude-opus-4-8`（anthropic）/ `gpt-4o-mini`（openai）| 模型 ID |
+| `AGENT_LLM_BASE_URL` | 各 provider 官方端点 | 自建 / 兼容网关覆盖点（openai 须含 `/v1`）|
+| `AGENT_LLM_MAX_TOKENS` | `700` | 单步产物上限（控延迟 / 成本）|
+| `AGENT_LLM_TEMPERATURE` | `0.4` | 采样温度 |
+| `AGENT_LLM_TIMEOUT` | `30` | 单次调用超时（秒）|
+| `AGENT_LLM_MAX_RETRIES` | `2` | 超时 / 5xx / 网络错误的重试次数 |
+| `AGENT_LLM_WALL_BUDGET` | `120` | 单次 autopilot 调用的 LLM 墙钟预算（秒）；超则其余单 `skipped(reason="budget")`；`0` = 不限 |
+
+> **提示**：`AGENT_LLM_MODEL` 默认 `claude-opus-4-8` 追求质量；**autopilot 密集 / 整队场景**
+> 建议改用更快更省的模型（如 Haiku 级）以压低串行时延与成本。**一键回滚**：置
+> `AGENT_LLM_PROVIDER=none`（或清空 `AGENT_LLM_API_KEY`）即回退确定性文案，无需改码。
+
+启用示例（PowerShell，仅当前会话有效；不设即离线）：
+
+```powershell
+$env:AGENT_LLM_PROVIDER = 'anthropic'
+$env:AGENT_LLM_API_KEY  = '<your-key>'
+python app.py
+```
+
+设计与验收细节见 [`docs/plans/real-agent-execution/spec.md`](docs/plans/real-agent-execution/spec.md)。
