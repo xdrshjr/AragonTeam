@@ -26,6 +26,8 @@ export default function RequirementsPage() {
   const { user } = useAuth();
   // 后端 POST /requirements 限 admin|pm（§2.4），member 隐藏新建入口，避免提交后才 403。
   const canCreate = user?.role === "admin" || user?.role === "pm";
+  // 【§2.9-C1】/assign 后端限 pm/admin；判据同 canCreate，member 不应看到点了必 403 的「指派」按钮。
+  const canAssign = canCreate;
 
   // 【Phase-3 §2.6】过滤条状态；keyword 防抖后进入查询键。
   const [keyword, setKeyword] = useState("");
@@ -78,12 +80,15 @@ export default function RequirementsPage() {
     assignee_type: null,
     assignee_id: null,
   });
+  const [assigning, setAssigning] = useState(false);
 
   async function doAssign() {
     if (!assignTarget || !assignee2.assignee_type) {
       toast.error("请选择指派对象");
       return;
     }
+    if (assigning) return; // 【§2.10-D2】防重复提交（慢网双击）。
+    setAssigning(true);
     try {
       await api.patch(`/requirements/${assignTarget.id}/assign`, assignee2);
       toast.success("指派成功");
@@ -92,6 +97,8 @@ export default function RequirementsPage() {
       mutate();
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "指派失败");
+    } finally {
+      setAssigning(false);
     }
   }
 
@@ -154,7 +161,7 @@ export default function RequirementsPage() {
                   <th className="px-4 py-3 font-medium">状态</th>
                   <th className="px-4 py-3 font-medium">优先级</th>
                   <th className="px-4 py-3 font-medium">负责人</th>
-                  <th className="px-4 py-3 font-medium text-right">操作</th>
+                  {canAssign && <th className="px-4 py-3 font-medium text-right">操作</th>}
                 </tr>
               </thead>
               <tbody>
@@ -180,22 +187,24 @@ export default function RequirementsPage() {
                         </span>
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-right">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setAssignTarget(r);
-                          setAssignee({
-                            assignee_type: r.assignee_type,
-                            assignee_id: r.assignee_id,
-                          });
-                        }}
-                      >
-                        指派
-                      </Button>
-                    </td>
+                    {canAssign && (
+                      <td className="px-4 py-3 text-right">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setAssignTarget(r);
+                            setAssignee({
+                              assignee_type: r.assignee_type,
+                              assignee_id: r.assignee_id,
+                            });
+                          }}
+                        >
+                          指派
+                        </Button>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -233,7 +242,9 @@ export default function RequirementsPage() {
             <Button variant="ghost" onClick={() => setAssignTarget(null)}>
               取消
             </Button>
-            <Button onClick={doAssign}>确认指派</Button>
+            <Button onClick={doAssign} disabled={assigning}>
+              {assigning ? "指派中…" : "确认指派"}
+            </Button>
           </>
         }
       >

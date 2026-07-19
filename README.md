@@ -291,3 +291,32 @@ npm run build        # next build → 成功
 ```
 
 设计与验收细节见 [`docs/plans/reliability-hardening/spec.md`](docs/plans/reliability-hardening/spec.md)。
+
+---
+
+## 主流程完备化与页面可用性收官（Feature Completeness）—— 每个主要功能都能端到端跑通、每个页面在异常与权限下都能正确使用
+
+在「稳健化收官」之后，本轮做一次**收敛式功能完备化 + 页面可用性收口**：让每一个已存在的主要功能都能端到端跑通并给出正确数据，让每一个客户端页面在后端异常、会话过期、权限不足三类边界下都优雅可用。零新表、零新依赖、不破坏成功路径契约。
+
+- **自主 AI 团队闭环真正闭合（dev→qa 交接）**：在自主编排层（`agent_autopilot.autorun`）为 dev→qa 增加一处**确定性交接**——把被推进到 qa 泳道状态（需求 `testing` / BUG `verifying`）的单重指派给一个可用 qa-agent（**只改多态 assignee，绝不碰状态机**）。于是 `/autorun`、`/tick`、`/autorun-all` 都能把需求带到 `reviewing`（待人工审批）、把 BUG 带到 `closed`；存量已停在测试/验证却指派给非-qa 的单（含 seed 演示单）经 `except NoAgentAction` 分支同一交接被解救，不再永久卡死。至此「一键运行整支 AI 团队一轮」终于能产出端到端完成的单。
+- **默认列表视图给对顺序**：需求 / BUG 扁平列表默认按「最近更新」（`updated_at desc, id desc`）全局排序，与「我的工作」一致；`position` 仅继续服务看板列内排序（此前用列内序号排跨状态的扁平列表会交错各列、顺序无意义）。看板接口不受影响。
+- **残余坏输入 500→400 收口**：`claim_count`（`want_int`）、`email`（`want_str`）、`description`（`want_str(strip=False)`）三处仍会 500 的字段全部收敛为 400；`want_str` 枚举字段空串回退 `default`（不再落库非法 `""`）。
+- **Agent offline 语义收口**：自主编排（`/autorun`、`/tick`、`/autorun-all`）与 `agent-advance?run=all` 尊重 `offline`（拒 409 / 计入 `skipped`），软锁 `finally` 恢复原状态（不再把 offline 清成 idle）。
+- **页面错误态完备化**：补齐上一轮漏掉的**看板页、工单抽屉、团队页**的 `error`/加载分支——后端出错不再永久卡骨架，深链 / 过期通知点开已删工单时抽屉显示可关闭的错误态，团队页失败不再误读为「无成员」。
+- **会话过期全局自动登出**：`api.ts` 在 401（非 `/auth/` 路径）时清 token 并广播 `aragon:unauthorized`，`AuthProvider` 订阅后清态 → 外壳自动跳登录，不再全站「重试也失败」。
+- **列表 / 看板写按钮按角色门禁**：列表页内联「指派」与需求看板「转 BUG」仅对 pm/admin 可见（与后端权威一致），无权成员不再看到点了必 403 的按钮。
+- **一批交互正确性加固**：铃铛角标读后即时同步、指派弹窗防重复提交、建单带指派部分失败精确反馈（仍刷新、不留孤单）、抽屉连改级别不再触发假并发冲突、仪表盘「本周活动数」去死链。
+
+### 质量门禁
+
+```powershell
+cd backend
+pytest -q            # ≥222 用例全绿（新增自主闭环 / offline / 残余坏输入 / 枚举回退用例）
+```
+```
+cd frontend
+npm run typecheck    # tsc --noEmit → 0 error
+npm run build        # next build → 成功
+```
+
+更多设计细节见 [`docs/plans/feature-completeness/spec.md`](docs/plans/feature-completeness/spec.md)。

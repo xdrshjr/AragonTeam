@@ -17,6 +17,7 @@ import time
 from extensions import db
 from models.requirement import Requirement
 from models.bug import Bug
+from models.agent import Agent
 from models.activity import Activity
 from services import workflow, agent_runner, notifications, agent_executor
 
@@ -32,6 +33,43 @@ AGENT_CLAIMABLE = {
     "generic": [("requirement", "new"), ("bug", "open")],
     "qa": [],
 }
+
+# 推进到该「(entity)->status」即进入 qa 职责区，需交接给 qa-agent 继续（§2.2 核心 P1）。
+_QA_HANDOFF_STATUS = {"requirement": "testing", "bug": "verifying"}
+
+
+def _maybe_handoff_to_qa(entity, ticket):
+    """dev/generic 把单推进到 qa 泳道状态后，重指派给一个可用 qa-agent（**不 commit、不改状态**）。
+
+    只改多态 assignee（assignee_type='agent' + assignee_id=qa.id）——状态迁移已由 advance_one
+    合法完成，本函数**绝不**触碰 status/position（不绕过状态机）。无可用 qa-agent → no-op。
+    返回被交接到的 qa-agent 或 None。
+    """
+    if ticket.status != _QA_HANDOFF_STATUS.get(entity):
+        return None
+    # 已是 qa-agent 名下 → 无需交接。
+    if ticket.assignee_type == "agent" and ticket.assignee_id is not None:
+        cur = db.session.get(Agent, ticket.assignee_id)
+        if cur is not None and cur.kind == "qa":
+            return None
+    # 取一个非 offline 的 qa-agent（优先 idle；busy 也可，下一轮会处理）。
+    qa = Agent.query.filter_by(kind="qa").filter(Agent.status != "offline")\
+        .order_by(Agent.id.asc()).first()
+    if qa is None:
+        return None
+    ticket.assignee_type = "agent"
+    ticket.assignee_id = qa.id
+    Activity.log(
+        entity, ticket.id, "assigned", actor=("agent", qa.id),
+        from_status=ticket.status, to_status=ticket.status,
+        message=f"{qa.name} 接手{_label(entity)}「{ticket.title}」进入测试/验证",
+    )
+    # 【评审 R1】通知源单 reporter（人类）qa 已接手：复用 notify_claim（收件人=reporter、
+    # type="assigned"）。**绝不**用 notify_assignment——它仅通知**人类 assignee**，而此刻
+    # assignee 已是 qa-agent（Agent），会在 notifications.py 对非 user assignee 直接 return、
+    # 静默不发，使「reporter 收到交接通知」的验收断言落空。reporter 缺省（None）→ notify 自跳过。
+    notifications.notify_claim(ticket, entity, qa)
+    return qa
 
 
 def _claim_from_lane(agent, entity, claimable_status):
@@ -115,6 +153,11 @@ def autorun(agent, run_all=False):
                 try:
                     to, comment, _activity = agent_runner.advance_one(entity, ticket, agent)
                 except agent_runner.NoAgentAction:
+                    # 【评审 R2】存量卡在 qa 泳道状态的非-qa 单也要交接，否则永远走不完。
+                    handed = _maybe_handoff_to_qa(entity, ticket)
+                    if handed is not None:
+                        db.session.commit()
+                        break   # 已易主，交 qa-agent 接力（本轮后续 / 下一轮）
                     if steps_this == 0:
                         skipped.append({"entity": entity, "id": ticket.id, "reason": "no-action"})
                     break
@@ -131,6 +174,11 @@ def autorun(agent, run_all=False):
                     from_status=frm, to_status=to,
                 )
                 db.session.commit()
+                # —— dev→qa 交接（闭合自主闭环）；交接只改 assignee，随本步事务一并提交 ——
+                handed = _maybe_handoff_to_qa(entity, ticket)
+                if handed is not None:
+                    db.session.commit()
+                    break   # 本 agent 不再推进此单（已易主），交由 qa-agent 下一轮/本轮处理
                 if not run_all:
                     break
                 if steps_this >= agent_runner.MAX_AGENT_STEPS:

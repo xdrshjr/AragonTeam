@@ -27,7 +27,8 @@ def create_user():
     password = want_str(data, "password", strip=False)
     role = want_str(data, "role", default="member", choices=ROLES)
     display_name = want_str(data, "display_name") or username
-    email = data.get("email")
+    # 【§2.4-C2】非串 email → 400（此前绑到 String 列 commit 触 500）；缺省/空 → None。
+    email = want_str(data, "email", required=False) or None
 
     if not username or not password:
         return jsonify({"error": "username and password are required"}), 400
@@ -65,7 +66,8 @@ def patch_user(user_id):
         # 非串 display_name → 400（此前直接赋值，落库后 to_dict 类型脏）。
         user.display_name = want_str(data, "display_name")
     if "email" in data:
-        user.email = data["email"]
+        # 【§2.4-C2】非串 email → 400（此前直接赋值，commit 触 500）；空 → None。
+        user.email = want_str(data, "email", required=False) or None
     if data.get("password"):
         user.set_password(want_str(data, "password", strip=False, required=True))
 

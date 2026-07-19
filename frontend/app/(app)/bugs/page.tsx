@@ -26,6 +26,8 @@ export default function BugsPage() {
   const { user } = useAuth();
   // 后端 POST /bugs 限 admin|pm（§2.4），member 隐藏新建入口，避免提交后才 403。
   const canCreate = user?.role === "admin" || user?.role === "pm";
+  // 【§2.9-C1】/assign 后端限 pm/admin；判据同 canCreate，member 不应看到点了必 403 的「指派」按钮。
+  const canAssign = canCreate;
 
   // 【Phase-3 §2.6】过滤条状态（BUG 侧的等级为 severity）。
   const [keyword, setKeyword] = useState("");
@@ -78,12 +80,15 @@ export default function BugsPage() {
     assignee_type: null,
     assignee_id: null,
   });
+  const [assigning, setAssigning] = useState(false);
 
   async function doAssign() {
     if (!assignTarget || !assignee2.assignee_type) {
       toast.error("请选择指派对象");
       return;
     }
+    if (assigning) return; // 【§2.10-D2】防重复提交（慢网双击）。
+    setAssigning(true);
     try {
       await api.patch(`/bugs/${assignTarget.id}/assign`, assignee2);
       toast.success("指派成功");
@@ -92,6 +97,8 @@ export default function BugsPage() {
       mutate();
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "指派失败");
+    } finally {
+      setAssigning(false);
     }
   }
 
@@ -155,7 +162,7 @@ export default function BugsPage() {
                   <th className="px-4 py-3 font-medium">严重度</th>
                   <th className="px-4 py-3 font-medium">负责人</th>
                   <th className="px-4 py-3 font-medium">源需求</th>
-                  <th className="px-4 py-3 font-medium text-right">操作</th>
+                  {canAssign && <th className="px-4 py-3 font-medium text-right">操作</th>}
                 </tr>
               </thead>
               <tbody>
@@ -184,22 +191,24 @@ export default function BugsPage() {
                     <td className="px-4 py-3 text-ink-muted">
                       {b.related_requirement_id ? `REQ-${b.related_requirement_id}` : "—"}
                     </td>
-                    <td className="px-4 py-3 text-right">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setAssignTarget(b);
-                          setAssignee({
-                            assignee_type: b.assignee_type,
-                            assignee_id: b.assignee_id,
-                          });
-                        }}
-                      >
-                        指派
-                      </Button>
-                    </td>
+                    {canAssign && (
+                      <td className="px-4 py-3 text-right">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setAssignTarget(b);
+                            setAssignee({
+                              assignee_type: b.assignee_type,
+                              assignee_id: b.assignee_id,
+                            });
+                          }}
+                        >
+                          指派
+                        </Button>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -234,7 +243,9 @@ export default function BugsPage() {
             <Button variant="ghost" onClick={() => setAssignTarget(null)}>
               取消
             </Button>
-            <Button onClick={doAssign}>确认指派</Button>
+            <Button onClick={doAssign} disabled={assigning}>
+              {assigning ? "指派中…" : "确认指派"}
+            </Button>
           </>
         }
       >

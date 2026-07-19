@@ -74,8 +74,10 @@ export function useTicket(entity: Entity, id: number | null) {
         ticket?.updated_at && body.expected_updated_at === undefined
           ? { ...body, expected_updated_at: ticket.updated_at }
           : body;
-      await api.patch(`/${entity}/${id}`, payload);
-      mutateTicket();
+      // 【§2.10-D4】用 PATCH 返回体（含新 updated_at）落缓存，使下一次乐观并发写携带新鲜时间戳，
+      // 避免连续自我编辑（如连改优先级/严重度）在 mutate 回来前触发假 409（并发冲突误报）。
+      const updated = await api.patch<Ticket>(`/${entity}/${id}`, payload);
+      mutateTicket(updated, { revalidate: false });
       mutateFeed();
     },
     [entity, id, ticket, mutateTicket, mutateFeed]

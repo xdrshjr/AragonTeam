@@ -60,7 +60,9 @@ def register():
     password = want_str(data, "password", strip=False)
     role = want_str(data, "role", default="member", choices=ROLES)
     display_name = want_str(data, "display_name") or username
-    email = data.get("email")
+    # 【§2.4-C2】非串 email（{"x":1}）绑到 String 列 → commit 触 InterfaceError 500；
+    # want_str 保证非串即 400。缺省/空 → None（保持既有宽松语义，格式校验仍只在 me.py 自助改资料处）。
+    email = want_str(data, "email", required=False) or None
 
     if not username or not password:
         return jsonify({"error": "username and password are required"}), 400

@@ -37,6 +37,16 @@ interface RequestOptions {
   params?: Record<string, string | number | undefined | null>;
 }
 
+// 会话过期/失效的全局信号（§2.8）：401（非 /auth/ 路径）→ 清 token 并广播 aragon:unauthorized，
+// 由 AuthProvider 落地为登出 + 外壳跳登录。排除 /auth/ 路径——登录接口的 401（凭据错误）不是
+// 「会话过期」，不应触发登出重定向。api.ts 不 import auth，用 CustomEvent 事件总线避免环依赖。
+function signalUnauthorizedIfNeeded(path: string, status: number) {
+  if (status === 401 && !path.startsWith("/auth/") && typeof window !== "undefined") {
+    setToken(null);
+    window.dispatchEvent(new CustomEvent("aragon:unauthorized"));
+  }
+}
+
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = "GET", body, params } = options;
 
@@ -81,6 +91,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   }
 
   if (!res.ok) {
+    signalUnauthorizedIfNeeded(path, res.status);
     const message =
       (data && (data.error as string)) || `请求失败（${res.status}）`;
     throw new ApiError(res.status, message, data?.detail, data?.allowed);
@@ -139,6 +150,7 @@ export async function getWithHeaders<T>(
     }
   }
   if (!res.ok) {
+    signalUnauthorizedIfNeeded(path, res.status);
     const message = (body && (body.error as string)) || `请求失败（${res.status}）`;
     throw new ApiError(res.status, message, body?.detail, body?.allowed);
   }

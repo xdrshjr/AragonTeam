@@ -53,6 +53,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     restore();
   }, [restore]);
 
+  // 【§2.8】会话过期全局登出：api.ts 在 401（非 /auth/ 路径）时广播 aragon:unauthorized；
+  // 此处订阅后清态，setUser(null) 触发 (app)/layout 既有守卫跳登录（幂等，无循环）。
+  useEffect(() => {
+    function onUnauth() {
+      setToken(null);
+      setUser(null);
+    }
+    window.addEventListener("aragon:unauthorized", onUnauth);
+    return () => window.removeEventListener("aragon:unauthorized", onUnauth);
+  }, []);
+
   const login = useCallback(async (username: string, password: string) => {
     const { token, user } = await api.post<{ token: string; user: User }>(
       "/auth/login",

@@ -159,7 +159,9 @@ def list_requirements():
         q = q.filter(or_(Requirement.title.ilike(like, escape="\\"),
                          Requirement.description.ilike(like, escape="\\")))
     # 【Phase-2 §2.5-3】分页（非破坏）：响应体仍为裸数组，总数经 X-Total-Count 暴露。
-    q = q.order_by(Requirement.position.asc(), Requirement.id.asc())
+    # 【§2.3】扁平列表按「最近更新」全局排序（与 /me/work 一致）；position 仅服务看板列内排序，
+    # 用它排跨状态的扁平列表会交错各列、语义混乱。响应 shape 不变，仅默认顺序更合理。
+    q = q.order_by(Requirement.updated_at.desc(), Requirement.id.desc())
     rows, total = paginate(q)
     resp = jsonify([r.to_dict() for r in rows])
     return with_total_count(resp, total), 200
@@ -173,6 +175,9 @@ def create_requirement():
     data = json_body()
     title = want_str(data, "title", required=True, max_len=200)
     priority = want_str(data, "priority", default="medium", choices=PRIORITIES)
+    # 【§2.4-C3】非串 description（{"x":1}）绑到 Text 列 → commit 触 500；want_str 保证非串即 400。
+    # strip=False 保留描述的换行/缩进（描述可为多行工作说明）；缺省/空 → None（与现状一致）。
+    description = want_str(data, "description", required=False, strip=False) or None
     project_id = want_int(data, "project_id")
     # §2.8-1：project_id 存在性校验（此前接受任意值不校验）。
     perr = _validate_project(project_id)
@@ -182,7 +187,7 @@ def create_requirement():
     reporter = current_user()
     req = Requirement(
         title=title,
-        description=data.get("description"),
+        description=description,
         priority=priority,
         project_id=project_id,
         status="new",
@@ -226,7 +231,8 @@ def patch_requirement(req_id):
         req.title = want_str(data, "title", required=True, max_len=200)
         changed = True
     if "description" in data:
-        req.description = data["description"]
+        # 【§2.4-C3】非串 description → 400（此前直接赋值，commit 触 500）；strip=False 保留正文格式。
+        req.description = want_str(data, "description", required=False, strip=False) or None
         changed = True
     if "priority" in data:
         req.priority = want_str(data, "priority", required=True, choices=PRIORITIES)
@@ -429,6 +435,10 @@ def do_agent_advance(entity, model, ticket_id):
         return jsonify({"error": "ticket is not assigned to an agent"}), 409
 
     if request.args.get("run") == "all":
+        # 【§2.6-E2】run=all 有 busy 软锁窗口，须与 /autorun、/tick 一致地尊重 busy/offline，
+        # 否则并发下会盲目置 busy、finally 归 idle，提前释放另一条 run 的锁。
+        if agent.status in ("busy", "offline"):
+            return jsonify({"error": "agent is busy or offline"}), 409
         return _agent_run_all(entity, ticket, agent)
 
     # —— 单步（【R-04】同步单事务，终态即 idle，不写不可观测的 busy）——
@@ -454,8 +464,9 @@ def _agent_run_all(entity, ticket, agent):
     """连续推进至无动作 / 终态 / MAX_AGENT_STEPS 上限（Phase-2 §2.2.3 P1）。
 
     【R-04】唯有 run=all 逐步 commit，busy 才成为可观测窗口：先置 busy 并 commit，
-    循环每步各自 commit，finally 归 idle 并 commit（含异常路径）。
+    循环每步各自 commit，finally **恢复原状态** 并 commit（含异常路径，§2.6-E2 统一软锁语义）。
     """
+    prev = agent.status
     agent.status = "busy"
     db.session.commit()
     steps = []
@@ -475,7 +486,7 @@ def _agent_run_all(entity, ticket, agent):
             if workflow.is_terminal(entity, ticket.status):
                 break
     finally:
-        agent.status = "idle"
+        agent.status = prev
         db.session.commit()
     return jsonify({
         "ticket": ticket.to_dict(),

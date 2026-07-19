@@ -111,6 +111,19 @@ def test_same_column_reorder_by_position(client, auth):
     assert new_col[0]["id"] == ids[2]
 
 
+def test_list_default_order_by_recent_update(client, auth):
+    """【§2.3】扁平列表按 updated_at 降序（最近更新在前），而非旧的列内 position 序。"""
+    a = client.post("/api/requirements", json={"title": "A"}, headers=auth("pm")).get_json()
+    b = client.post("/api/requirements", json={"title": "B"}, headers=auth("pm")).get_json()
+    c = client.post("/api/requirements", json={"title": "C"}, headers=auth("pm")).get_json()
+    # 更新最早创建的 A → 其 updated_at 前移到最新。
+    client.patch(f"/api/requirements/{a['id']}", json={"title": "A2"}, headers=auth("pm"))
+    items = client.get("/api/requirements", headers=auth("pm")).get_json()
+    ids = [r["id"] for r in items]
+    assert ids[0] == a["id"]                 # 最近更新在最前
+    assert ids == [a["id"], c["id"], b["id"]]  # updated_at desc, id desc
+
+
 def test_move_non_string_status_returns_400_not_500(client, auth, make_requirement, data):
     """【§2.3-B1】非串 status（list）此前 `status in _table`(dict) 触 unhashable 500——现 400。"""
     req = make_requirement(assignee=("user", data["member_id"]))

@@ -40,23 +40,34 @@ export default function RequirementForm({ onCreated, onCancel }: Props) {
       return;
     }
     setSubmitting(true);
+    // 【§2.10-D3】create 与 assign 分别处理结果：create 成功即视为成功；若随后指派失败
+    // （如所选 assignee 被删 → 404），单已创建（未指派、new），仍刷新列表+关闭弹窗并精确提示，
+    // 避免笼统误报「创建失败」且留下不刷新的孤单。
+    let created: Requirement;
     try {
-      let req = await api.post<Requirement>("/requirements", {
+      created = await api.post<Requirement>("/requirements", {
         title: title.trim(),
         description: description.trim() || undefined,
         priority,
       });
-      // 若选择了指派对象，创建后立即指派（触发 new→assigned）。
-      if (assignee.assignee_type && assignee.assignee_id) {
-        req = await api.patch<Requirement>(`/requirements/${req.id}/assign`, assignee);
-      }
-      toast.success("需求已创建");
-      onCreated(req);
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "创建失败");
-    } finally {
       setSubmitting(false);
+      return;
     }
+    let result = created;
+    if (assignee.assignee_type && assignee.assignee_id) {
+      try {
+        result = await api.patch<Requirement>(`/requirements/${created.id}/assign`, assignee);
+        toast.success("需求已创建");
+      } catch (err) {
+        toast.info(`已创建，但指派失败：${err instanceof ApiError ? err.message : "未知原因"}`);
+      }
+    } else {
+      toast.success("需求已创建");
+    }
+    setSubmitting(false);
+    onCreated(result);
   }
 
   return (

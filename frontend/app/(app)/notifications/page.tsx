@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import { api, listFetcher, ApiError } from "@/lib/api";
 import { useToast } from "@/lib/toast";
 import type { Notification } from "@/lib/types";
@@ -25,13 +25,22 @@ export default function NotificationsPage() {
   const router = useRouter();
   const toast = useToast();
   const { data, error, mutate } = useSWR("/notifications?limit=100", listFetcher<Notification>);
+  const { mutate: globalMutate } = useSWRConfig();
   const items = data?.items;
+
+  // 【§2.10-D1】整页读单/read-all 后一并刷新铃铛用的两个 key（未读数 + 下拉列表），
+  // 否则角标滞留至多 ~20s（铃铛轮询周期）才同步。
+  function syncBell() {
+    globalMutate("/notifications/unread-count");
+    globalMutate("/notifications?limit=15");
+  }
 
   async function openItem(n: Notification) {
     if (!n.is_read) {
       try {
         await api.post(`/notifications/${n.id}/read`);
         mutate();
+        syncBell();
       } catch {
         /* 忽略：不阻断跳转 */
       }
@@ -50,6 +59,7 @@ export default function NotificationsPage() {
     try {
       await api.post("/notifications/read-all");
       mutate();
+      syncBell();
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "操作失败，请重试");
     }

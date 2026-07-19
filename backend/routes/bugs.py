@@ -61,7 +61,8 @@ def list_bugs():
         q = q.filter(or_(Bug.title.ilike(like, escape="\\"),
                          Bug.description.ilike(like, escape="\\")))
     # 【Phase-2 §2.5-3】分页（非破坏）：裸数组 + X-Total-Count。
-    q = q.order_by(Bug.position.asc(), Bug.id.asc())
+    # 【§2.3】扁平列表按「最近更新」全局排序（与需求侧、/me/work 一致）；position 仅服务看板列内排序。
+    q = q.order_by(Bug.updated_at.desc(), Bug.id.desc())
     rows, total = paginate(q)
     resp = jsonify([b.to_dict() for b in rows])
     return with_total_count(resp, total), 200
@@ -75,6 +76,8 @@ def create_bug():
     data = json_body()
     title = want_str(data, "title", required=True, max_len=200)
     severity = want_str(data, "severity", default="major", choices=SEVERITIES)
+    # 【§2.4-C3】非串 description → 400（此前绑到 Text 列 commit 触 500）；strip=False 保留正文格式。
+    description = want_str(data, "description", required=False, strip=False) or None
     project_id = want_int(data, "project_id")
     # §2.8-1：project_id 存在性校验。
     perr = _validate_project(project_id)
@@ -88,7 +91,7 @@ def create_bug():
     reporter = current_user()
     bug = Bug(
         title=title,
-        description=data.get("description"),
+        description=description,
         severity=severity,
         project_id=project_id,
         related_requirement_id=related,
@@ -133,7 +136,8 @@ def patch_bug(bug_id):
         bug.title = want_str(data, "title", required=True, max_len=200)
         changed = True
     if "description" in data:
-        bug.description = data["description"]
+        # 【§2.4-C3】非串 description → 400（此前直接赋值，commit 触 500）；strip=False 保留正文格式。
+        bug.description = want_str(data, "description", required=False, strip=False) or None
         changed = True
     if "severity" in data:
         bug.severity = want_str(data, "severity", required=True, choices=SEVERITIES)

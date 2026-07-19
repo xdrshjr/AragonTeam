@@ -15,6 +15,7 @@ import AssigneePicker, { AssigneeValue } from "@/components/AssigneePicker";
 import FeedTimeline from "@/components/collab/FeedTimeline";
 import CommentComposer from "@/components/collab/CommentComposer";
 import { SkeletonDrawer } from "@/components/ui/Skeleton";
+import ErrorState from "@/components/ui/ErrorState";
 
 type Entity = "requirements" | "bugs";
 
@@ -51,7 +52,7 @@ export default function TicketDrawer({ entity, id, onClose, onChanged }: Props) 
   const { user } = useAuth();
   const isBug = entity === "bugs";
   const {
-    ticket, feed, isLoading,
+    ticket, feed, isLoading, error: ticketError,
     refresh, addComment, advanceAgent, assign, patch, convertToBug,
   } = useTicket(entity, id);
 
@@ -290,7 +291,17 @@ export default function TicketDrawer({ entity, id, onClose, onChanged }: Props) 
           </button>
         </div>
 
-        {!ticket ? (
+        {ticketError && !ticket ? (
+          // 【§2.7-A2】深链 ?ticket=<已删 id> / 过期通知点击 → 接 useTicket().error，
+          // 不再永久卡骨架；复用全站 ErrorState 原语（可重试），另给一个「关闭」出口
+          // （header 右上的 × 亦可用）。
+          <div className="flex flex-1 flex-col items-center justify-center">
+            <ErrorState message="无法加载该工单（可能已被删除）" onRetry={() => refresh()} />
+            <Button size="sm" variant="ghost" onClick={onClose}>
+              关闭
+            </Button>
+          </div>
+        ) : !ticket ? (
           <SkeletonDrawer />
         ) : (
           <>

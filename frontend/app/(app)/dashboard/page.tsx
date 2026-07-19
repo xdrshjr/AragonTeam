@@ -43,7 +43,7 @@ function DistRow({
 export default function DashboardPage() {
   const { data: stats, error, mutate } = useSWR<Stats>("/stats", swrFetcher);
 
-  const cards = [
+  const cards: { label: string; value: number | string; href?: string }[] = [
     { label: "需求总数", value: stats?.requirements.total ?? "—", href: "/requirements" },
     { label: "BUG 总数", value: stats?.bugs.total ?? "—", href: "/bugs" },
     {
@@ -51,7 +51,8 @@ export default function DashboardPage() {
       value: stats ? `${stats.agents.idle} / ${stats.agents.total}` : "—",
       href: "/agents",
     },
-    { label: "本周活动数", value: stats?.activities_this_week ?? "—", href: "/dashboard" },
+    // 【§2.10-D5】本周活动数无有意义的导航目标 → 纯展示卡（去死链；此前 href:"/dashboard" 原地跳转）。
+    { label: "本周活动数", value: stats?.activities_this_week ?? "—" },
   ];
 
   const reqTotal = stats?.requirements.total ?? 0;
@@ -68,16 +69,29 @@ export default function DashboardPage() {
         <>
         {/* 统计卡 */}
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          {cards.map((c) => (
-            <Link
-              key={c.label}
-              href={c.href}
-              className="rounded-xl border border-border bg-surface p-5 shadow-card transition-shadow hover:shadow-panel"
-            >
-              <div className="text-sm text-ink-muted">{c.label}</div>
-              <div className="mt-2 font-serif text-3xl text-ink">{c.value}</div>
-            </Link>
-          ))}
+          {cards.map((c) => {
+            const base = "rounded-xl border border-border bg-surface p-5 shadow-card";
+            const inner = (
+              <>
+                <div className="text-sm text-ink-muted">{c.label}</div>
+                <div className="mt-2 font-serif text-3xl text-ink">{c.value}</div>
+              </>
+            );
+            // 可导航卡保留 <Link> + hover；纯展示卡（本周活动数）用 <div>，同视觉、无死链。
+            return c.href ? (
+              <Link
+                key={c.label}
+                href={c.href}
+                className={`${base} transition-shadow hover:shadow-panel`}
+              >
+                {inner}
+              </Link>
+            ) : (
+              <div key={c.label} className={base}>
+                {inner}
+              </div>
+            );
+          })}
         </div>
 
         <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-3">

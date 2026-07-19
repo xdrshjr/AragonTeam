@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api, ApiError } from "@/lib/api";
 import { useToast } from "@/lib/toast";
+import { useAuth } from "@/lib/auth";
 import { useBoard } from "@/hooks/useBoard";
 import type { Requirement, Bug, Card } from "@/lib/types";
 import Header from "@/components/layout/Header";
@@ -12,11 +13,15 @@ import Button from "@/components/ui/Button";
 import KanbanBoard from "@/components/kanban/KanbanBoard";
 import TicketDrawer from "@/components/TicketDrawer";
 import { SkeletonBoard } from "@/components/ui/Skeleton";
+import ErrorState from "@/components/ui/ErrorState";
 
 export default function RequirementsBoardPage() {
   const router = useRouter();
   const toast = useToast();
-  const { board, isLoading, move, mutate } = useBoard("requirements");
+  const { board, error, isLoading, move, mutate } = useBoard("requirements");
+  const { user } = useAuth();
+  // 【§2.9-C2】转 BUG 后端限 pm/admin；member 不应看到点了必 403 的「转 BUG」按钮。
+  const canConvert = user?.role === "admin" || user?.role === "pm";
   const [converting, setConverting] = useState(false);
   const [openId, setOpenId] = useState<number | null>(null);
 
@@ -68,14 +73,16 @@ export default function RequirementsBoardPage() {
         }
       />
       <main className="flex-1 overflow-hidden p-6">
-        {isLoading || !board ? (
+        {error && !board ? (
+          <ErrorState message="无法加载看板" onRetry={() => mutate()} />
+        ) : isLoading || !board ? (
           <SkeletonBoard columns={7} />
         ) : (
           <KanbanBoard
             board={board}
             entity="requirements"
             onMove={move}
-            onConvert={onConvert}
+            onConvert={canConvert ? onConvert : undefined}
             onOpen={(card: Card) => setOpenId(card.id)}
           />
         )}

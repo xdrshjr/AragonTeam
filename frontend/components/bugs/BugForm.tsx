@@ -40,22 +40,33 @@ export default function BugForm({ onCreated, onCancel }: Props) {
       return;
     }
     setSubmitting(true);
+    // 【§2.10-D3】create 与 assign 分别处理结果：create 成功即视为成功；若随后指派失败，
+    // 单已创建（未指派、open），仍刷新列表+关闭弹窗并精确提示，避免误报「创建失败」+孤单不刷新。
+    let created: Bug;
     try {
-      let bug = await api.post<Bug>("/bugs", {
+      created = await api.post<Bug>("/bugs", {
         title: title.trim(),
         description: description.trim() || undefined,
         severity,
       });
-      if (assignee.assignee_type && assignee.assignee_id) {
-        bug = await api.patch<Bug>(`/bugs/${bug.id}/assign`, assignee);
-      }
-      toast.success("BUG 已创建");
-      onCreated(bug);
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "创建失败");
-    } finally {
       setSubmitting(false);
+      return;
     }
+    let result = created;
+    if (assignee.assignee_type && assignee.assignee_id) {
+      try {
+        result = await api.patch<Bug>(`/bugs/${created.id}/assign`, assignee);
+        toast.success("BUG 已创建");
+      } catch (err) {
+        toast.info(`已创建，但指派失败：${err instanceof ApiError ? err.message : "未知原因"}`);
+      }
+    } else {
+      toast.success("BUG 已创建");
+    }
+    setSubmitting(false);
+    onCreated(result);
   }
 
   return (

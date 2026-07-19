@@ -40,7 +40,12 @@ def want_str(data: dict, key: str, *, required: bool = False, default: str = "",
         default: 缺失时的返回值（required=False 时生效）。
         strip: 是否去除首尾空白。
         max_len: 最大长度（含）；超出即 400。
-        choices: 合法取值集合；非空且不在集合内即 400（空串跳过，交由 required 处理）。
+        choices: 合法取值集合；不在集合内即 400。**空串回退 default**（§2.5，不落库非法 ""）。
+
+    不变量（【评审 R6】）：**非必填的枚举调用方（`required=False` + `choices=`）必须同时传
+    `default`（且 `default ∈ choices`）**——否则归一后的空串会回退成非法的默认空串 ""，绕过枚举校验。
+    `required=True` 的枚举调用方不受此约束（空串已在上面 raise，走不到回退分支）。现网非必填枚举
+    调用方（priority→medium / severity→major / kind→generic / role→member）均满足此不变量。
 
     Returns:
         清洁后的字符串。
@@ -61,7 +66,10 @@ def want_str(data: dict, key: str, *, required: bool = False, default: str = "",
         raise ValidationError(f"{key} is required", field=key, expected="non-empty string")
     if max_len is not None and len(v) > max_len:
         raise ValidationError(f"{key} is too long", field=key, expected=f"length<={max_len}")
-    if choices is not None and v and v not in set(choices):
+    if choices is not None and not v:
+        # 【§2.5】有枚举 + 归一后为空 → 回退 default（不落库非法空串；required=True 的空串已在上面 raise）。
+        return default
+    if choices is not None and v not in set(choices):
         raise ValidationError(f"{key} is invalid", field=key,
                               expected=f"one of {sorted(set(choices))}")
     return v

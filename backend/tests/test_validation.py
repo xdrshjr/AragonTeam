@@ -251,3 +251,107 @@ def test_json_body_non_object_returns_empty(app):
         assert json_body() == {}
     with app.test_request_context(json={"a": 1}):
         assert json_body() == {"a": 1}
+
+
+# ————————————————————— §2.4：reliability-hardening 漏网的残余坏输入 500→400 —————————————————————
+
+def test_tick_non_int_claim_count_400_not_500(client, auth, data):
+    """【§2.4-C1】claim_count 非整此前经 int("x") 触 500——现 want_int → 400。"""
+    r = client.post(f"/api/agents/{data['dev_agent_id']}/tick", json={"claim_count": "x"},
+                    headers=auth("pm"))
+    assert r.status_code == 400
+    assert r.status_code != 500
+    assert r.get_json()["detail"]["field"] == "claim_count"
+
+
+def test_register_non_string_email_400_not_500(client, auth):
+    """【§2.4-C2】非串 email 此前绑到 String 列 commit 触 InterfaceError 500——现 400。"""
+    r = client.post("/api/auth/register",
+                    json={"username": "e1", "password": "pw12345", "email": {"x": 1}},
+                    headers=auth("admin"))
+    assert r.status_code == 400
+    assert r.status_code != 500
+    assert r.get_json()["detail"]["field"] == "email"
+
+
+def test_create_user_non_string_email_400_not_500(client, auth):
+    r = client.post("/api/users",
+                    json={"username": "e2", "password": "pw12345", "email": {"x": 1}},
+                    headers=auth("admin"))
+    assert r.status_code == 400
+    assert r.status_code != 500
+
+
+def test_patch_user_non_string_email_400_not_500(client, auth, data):
+    r = client.patch(f"/api/users/{data['member_id']}", json={"email": {"x": 1}},
+                     headers=auth("admin"))
+    assert r.status_code == 400
+    assert r.status_code != 500
+
+
+def test_create_requirement_non_string_description_400_not_500(client, auth):
+    """【§2.4-C3】非串 description 此前绑到 Text 列 commit 触 500——现 400。"""
+    r = client.post("/api/requirements", json={"title": "t", "description": {"x": 1}},
+                    headers=auth("pm"))
+    assert r.status_code == 400
+    assert r.status_code != 500
+    assert r.get_json()["detail"]["field"] == "description"
+
+
+def test_create_bug_non_string_description_400_not_500(client, auth):
+    r = client.post("/api/bugs", json={"title": "t", "description": {"x": 1}},
+                    headers=auth("pm"))
+    assert r.status_code == 400
+    assert r.status_code != 500
+
+
+def test_patch_requirement_non_string_description_400_not_500(client, auth, make_requirement):
+    req = make_requirement()
+    r = client.patch(f"/api/requirements/{req['id']}", json={"description": {"x": 1}},
+                     headers=auth("pm"))
+    assert r.status_code == 400
+    assert r.status_code != 500
+
+
+def test_valid_multiline_description_preserved_still_201(client, auth):
+    """strip=False 保留描述换行/缩进（描述可为多行工作说明）；正路仍 201。"""
+    body = "第一行\n  缩进的第二行\n"
+    r = client.post("/api/requirements", json={"title": "多行", "description": body},
+                    headers=auth("pm"))
+    assert r.status_code == 201
+    assert r.get_json()["description"] == body
+
+
+# ————————————————————— §2.5：want_str 枚举字段空串回退 default（不落库非法 ""）—————————————————————
+
+def test_want_str_choices_empty_returns_default(app):
+    """空串 + choices → 回退 default（不再绕过枚举、不落库 ""）。"""
+    with app.test_request_context():
+        assert want_str({"k": ""}, "k", default="medium", choices=("low", "medium")) == "medium"
+        assert want_str({"k": "  "}, "k", default="medium", choices=("low", "medium")) == "medium"
+
+
+def test_create_requirement_empty_priority_defaults_medium(client, auth):
+    r = client.post("/api/requirements", json={"title": "t", "priority": ""}, headers=auth("pm"))
+    assert r.status_code == 201
+    assert r.get_json()["priority"] == "medium"
+
+
+def test_create_bug_empty_severity_defaults_major(client, auth):
+    r = client.post("/api/bugs", json={"title": "t", "severity": ""}, headers=auth("pm"))
+    assert r.status_code == 201
+    assert r.get_json()["severity"] == "major"
+
+
+def test_create_agent_empty_kind_defaults_generic(client, auth):
+    r = client.post("/api/agents", json={"name": "空类型 Agent", "kind": ""}, headers=auth("pm"))
+    assert r.status_code == 201
+    assert r.get_json()["kind"] == "generic"
+
+
+def test_register_empty_role_defaults_member(client, auth):
+    r = client.post("/api/auth/register",
+                    json={"username": "r1", "password": "pw12345", "role": ""},
+                    headers=auth("admin"))
+    assert r.status_code == 201
+    assert r.get_json()["user"]["role"] == "member"

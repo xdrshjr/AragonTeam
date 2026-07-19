@@ -10,7 +10,7 @@ from flask_jwt_extended import jwt_required
 from extensions import db
 from models.agent import Agent, AGENT_KINDS
 from services.auth_helpers import require_role
-from services.validation import json_body, want_str
+from services.validation import json_body, want_str, want_int
 from services import agent_autopilot
 
 bp = Blueprint("agents", __name__, url_prefix="/api/agents")
@@ -18,13 +18,17 @@ bp = Blueprint("agents", __name__, url_prefix="/api/agents")
 
 def _run_with_lock(agent, fn):
     """busy 软锁（§2.2.1）：置 busy 并 commit（开锁 + 可观测）→ 执行 →
-    finally 归 idle 并 commit（含异常路径），与 Phase-2 `_agent_run_all` 同策略。"""
+    finally **恢复原状态** 并 commit（含异常路径），与 Phase-2 `_agent_run_all` 同策略。
+
+    【§2.6-E1】记录并恢复 prev（此时 prev 恒为 idle——offline/busy 已被入口门禁挡在外——
+    但显式恢复更正确、防未来回归，避免把 offline agent 跑完清成 idle。"""
+    prev = agent.status
     agent.status = "busy"
     db.session.commit()
     try:
         return fn()
     finally:
-        agent.status = "idle"
+        agent.status = prev
         db.session.commit()
 
 
@@ -110,9 +114,11 @@ def agents_autorun_all():
     run_all = request.args.get("run") == "all"
     runs = []
     for agent in Agent.query.order_by(Agent.id.asc()).all():
-        if agent.status == "busy":
+        # 【§2.6-E1】跳过 busy（运行中软锁）与 offline（管理员显式停用）；reason 精确到状态，
+        # 且**不**经 _run_with_lock，故 offline agent 状态不被清成 idle。
+        if agent.status in ("busy", "offline"):
             runs.append({"agent": agent.to_dict(), "claimed": [], "advanced": [],
-                         "skipped": [{"reason": "busy"}]})
+                         "skipped": [{"reason": agent.status}]})
             continue
         result = _run_with_lock(
             agent, lambda a=agent: agent_autopilot.tick(a, claim=claim, run_all=run_all))
@@ -144,8 +150,9 @@ def agent_autorun(agent_id):
     agent = db.session.get(Agent, agent_id)
     if agent is None:
         return jsonify({"error": "agent not found"}), 404
-    if agent.status == "busy":
-        return jsonify({"error": "agent is busy"}), 409  # 软锁
+    if agent.status in ("busy", "offline"):
+        # 【§2.6-E1】busy=运行中软锁；offline=管理员显式停用，autopilot 尊重之。
+        return jsonify({"error": "agent is busy or offline"}), 409
     run_all = request.args.get("run") == "all"
     result = _run_with_lock(agent, lambda: agent_autopilot.autorun(agent, run_all=run_all))
     return jsonify({
@@ -161,11 +168,13 @@ def agent_tick(agent_id):
     agent = db.session.get(Agent, agent_id)
     if agent is None:
         return jsonify({"error": "agent not found"}), 404
-    if agent.status == "busy":
-        return jsonify({"error": "agent is busy"}), 409  # 软锁
+    if agent.status in ("busy", "offline"):
+        # 【§2.6-E1】busy=运行中软锁；offline=管理员显式停用，autopilot 尊重之。
+        return jsonify({"error": "agent is busy or offline"}), 409
     data = json_body()
     claim = data.get("claim", True)
-    claim_count = data.get("claim_count", 1)
+    # 【§2.4-C1】非整 claim_count（"x"）此前经 int("x") 触 500；want_int 保证非整即 400，上限 20 防滥用。
+    claim_count = want_int(data, "claim_count", default=1, minimum=0, maximum=20)
     run_all = request.args.get("run") == "all"
     result = _run_with_lock(agent, lambda: agent_autopilot.tick(
         agent, claim=claim, claim_count=claim_count, run_all=run_all))

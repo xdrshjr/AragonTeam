@@ -56,3 +56,16 @@ def test_move_non_string_status_returns_400_not_500(client, auth, make_bug, data
                      headers=auth("pm"))
     assert r.status_code == 400
     assert r.status_code != 500
+
+
+def test_list_default_order_by_recent_update(client, auth):
+    """【§2.3】BUG 扁平列表按 updated_at 降序（最近更新在前），而非旧的列内 position 序。"""
+    a = client.post("/api/bugs", json={"title": "A"}, headers=auth("pm")).get_json()
+    b = client.post("/api/bugs", json={"title": "B"}, headers=auth("pm")).get_json()
+    c = client.post("/api/bugs", json={"title": "C"}, headers=auth("pm")).get_json()
+    # 更新最早创建的 A → 其 updated_at 前移到最新。
+    client.patch(f"/api/bugs/{a['id']}", json={"title": "A2"}, headers=auth("pm"))
+    items = client.get("/api/bugs", headers=auth("pm")).get_json()
+    ids = [x["id"] for x in items]
+    assert ids[0] == a["id"]                    # 最近更新在最前
+    assert ids == [a["id"], c["id"], b["id"]]   # updated_at desc, id desc

@@ -9,9 +9,10 @@ import Button from "@/components/ui/Button";
 import KanbanBoard from "@/components/kanban/KanbanBoard";
 import TicketDrawer from "@/components/TicketDrawer";
 import { SkeletonBoard } from "@/components/ui/Skeleton";
+import ErrorState from "@/components/ui/ErrorState";
 
 export default function BugsBoardPage() {
-  const { board, isLoading, move, mutate } = useBoard("bugs");
+  const { board, error, isLoading, move, mutate } = useBoard("bugs");
   const [openId, setOpenId] = useState<number | null>(null);
 
   // 【Phase-3 §2.3.3】通知直达：读 ?ticket=<id> 自动打开对应工单抽屉。
@@ -41,7 +42,9 @@ export default function BugsBoardPage() {
         }
       />
       <main className="flex-1 overflow-hidden p-6">
-        {isLoading || !board ? (
+        {error && !board ? (
+          <ErrorState message="无法加载看板" onRetry={() => mutate()} />
+        ) : isLoading || !board ? (
           <SkeletonBoard columns={5} />
         ) : (
           <KanbanBoard
