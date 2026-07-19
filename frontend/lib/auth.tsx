@@ -19,6 +19,8 @@ interface AuthState {
   login: (username: string, password: string) => Promise<void>;
   logout: () => void;
   refresh: () => Promise<void>;
+  // 就地刷新登录态（如自助改资料后），免一次 /auth/me 往返（account-settings §7）。
+  applyUser: (u: User) => void;
 }
 
 const AuthContext = createContext<AuthState | undefined>(undefined);
@@ -69,8 +71,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await restore();
   }, [restore]);
 
+  const applyUser = useCallback((u: User) => setUser(u), []);
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, refresh }}>
+    <AuthContext.Provider value={{ user, loading, login, logout, refresh, applyUser }}>
       {children}
     </AuthContext.Provider>
   );

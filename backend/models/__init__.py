@@ -11,6 +11,7 @@ from .bug import Bug, SEVERITIES
 from .activity import Activity, ENTITY_TYPES, ACTOR_TYPES
 from .comment import Comment, COMMENT_AUTHOR_TYPES, COMMENT_ENTITY_TYPES
 from .notification import Notification, NOTIFICATION_TYPES
+from .notification_preference import NotificationPreference
 
 __all__ = [
     "User", "ROLES",
@@ -21,4 +22,5 @@ __all__ = [
     "Activity", "ENTITY_TYPES", "ACTOR_TYPES",
     "Comment", "COMMENT_AUTHOR_TYPES", "COMMENT_ENTITY_TYPES",
     "Notification", "NOTIFICATION_TYPES",
+    "NotificationPreference",
 ]

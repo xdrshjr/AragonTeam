@@ -13,6 +13,7 @@ from extensions import db
 from models.notification import Notification
 from models.user import User
 from models.comment import Comment
+from services import notification_prefs
 
 # @提及正则（§2.3.1 notify_mentions）。
 _MENTION_RE = re.compile(r"@([A-Za-z0-9_]+)")
@@ -44,6 +45,10 @@ def notify(user_id, type, *, entity_type=None, entity_id=None, actor=None, messa
         return None
     actor_type, actor_id = (actor if actor else (None, None))
     if actor_type == "user" and actor_id == user_id:
+        return None
+    # 偏好闸（account-settings §3.1）：收件人显式静音该类型则不落库；缺省全开，
+    # 故无人静音时行为逐字节不变。读包在 no_autoflush 内，不打扰当前写事务。
+    if not notification_prefs.is_enabled(user_id, type):
         return None
     n = Notification(
         user_id=user_id,

@@ -261,3 +261,15 @@ export interface MeWork {
   assigned: { requirements: Requirement[]; bugs: Bug[] };
   reported: { requirements: Requirement[]; bugs: Bug[] };
 }
+
+// —— account-settings：账号自助中心 ——
+
+// 6 类通知的开关映射（GET/PATCH /me/notification-preferences 的 preferences 信封内容）。
+export type NotificationPreferences = Record<NotificationType, boolean>;
+
+// PATCH /me/profile 载荷（键均可选，仅提供的键才更新；username/role 后端恒忽略）。
+export interface ProfileUpdate {
+  display_name?: string;
+  email?: string;
+  avatar_color?: string;
+}
