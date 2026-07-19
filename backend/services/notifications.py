@@ -15,8 +15,10 @@ from models.user import User
 from models.comment import Comment
 from services import notification_prefs
 
-# @提及正则（§2.3.1 notify_mentions）。
-_MENTION_RE = re.compile(r"@([A-Za-z0-9_]+)")
+# @提及正则（§2.3.1 notify_mentions）。左边界为「非单词字符 / 行首」，避免把
+# name@example.com 误判为提及 example；用负向后顾而非 \s，兼容中文紧邻（请@member）。
+# 用户名字符集 [A-Za-z0-9_] 与 users.username 现况一致。
+_MENTION_RE = re.compile(r"(?<![A-Za-z0-9_])@([A-Za-z0-9_]+)")
 
 # entity → 人类可读名。
 _LABELS = {"requirement": "需求", "bug": "BUG"}
@@ -144,15 +146,28 @@ def notify_convert(src_req, new_bug, actor):
         )
 
 
-def notify_mentions(comment, actor):
-    """解析评论 body 中的 @username，向存在的用户各发一条 mentioned 通知（去重、排除自己）。"""
+def notify_mentions(comment, actor, ticket=None):
+    """解析评论 body 中的 @username，向存在的用户各发一条 mentioned 通知（去重、排除自己）。
+
+    Args:
+        comment: 刚落库的 Comment，其 body 供正则解析、entity_* 供通知定位。
+        actor: 施动者 (type, id)，用于 notify() 的「不给自己发」判定。
+        ticket: 可选工单对象。提供时文案带工单标题 + 评论摘要（与 notify_comment 对齐）；
+            缺省回退旧文案，保持函数独立可用（无调用方回归风险，见 spec §4.3/R6）。
+    """
     names = set(_MENTION_RE.findall(comment.body or ""))
     if not names:
         return
     users = User.query.filter(User.username.in_(names)).all()
+    if ticket is not None:
+        title = _short(getattr(ticket, "title", "") or "")
+        snippet = _short(comment.body, 30)
+        message = f"{_label(comment.entity_type)}「{title}」中有人提到你：{snippet}"
+    else:
+        message = f"你在{_label(comment.entity_type)} #{comment.entity_id} 的评论中被提及"
     for u in users:
         notify(
             u.id, "mentioned",
             entity_type=comment.entity_type, entity_id=comment.entity_id, actor=actor,
-            message=f"你在{_label(comment.entity_type)} #{comment.entity_id} 的评论中被提及",
+            message=message,
         )

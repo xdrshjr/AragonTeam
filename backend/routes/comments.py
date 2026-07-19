@@ -68,7 +68,7 @@ def _create_comment(entity: str, entity_id: int):
     # 【Phase-3 §2.3】扇出：评论通知参与者（排除作者本人 / Agent），并解析 @提及。
     actor = ("user", user.id) if user else ("system", None)
     notifications.notify_comment(obj, entity, comment, actor)
-    notifications.notify_mentions(comment, actor)
+    notifications.notify_mentions(comment, actor, ticket=obj)
     db.session.commit()
     return jsonify(comment.to_dict()), 201
 

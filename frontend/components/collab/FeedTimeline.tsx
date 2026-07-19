@@ -1,12 +1,33 @@
 "use client";
 
+import type { ReactNode } from "react";
 import type { FeedItem, AuthorSummary } from "@/lib/types";
-import { actionLabel, statusStyle } from "@/lib/constants";
+import { actionLabel, statusStyle, MENTION_RE } from "@/lib/constants";
 import Avatar from "@/components/ui/Avatar";
 import EmptyState from "@/components/ui/EmptyState";
 
 interface Props {
   items: FeedItem[];
+}
+
+// 把评论正文里的 @username 渲染为 clay chip；非提及段原样输出（外层保留 whitespace-pre-wrap）。
+// 用 String.prototype.matchAll（无状态消费全局 MENTION_RE，见 constants.ts·P2-1）切分。
+function renderBody(body: string): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  let last = 0;
+  let key = 0;
+  for (const m of body.matchAll(MENTION_RE)) {
+    const start = m.index ?? 0;
+    if (start > last) nodes.push(body.slice(last, start));
+    nodes.push(
+      <span key={`m-${key++}`} className="rounded bg-clay/10 px-1 font-medium text-clay-dark">
+        {m[0]}
+      </span>
+    );
+    last = start + m[0].length;
+  }
+  if (last < body.length) nodes.push(body.slice(last));
+  return nodes;
 }
 
 // 短时间格式（created_at 为 UTC，带 Z；JS Date 正确解析为本地时间）。
@@ -112,7 +133,7 @@ export default function FeedTimeline({ items }: Props) {
                   {shortTime(item.created_at)}
                 </span>
               </div>
-              <div className="whitespace-pre-wrap text-sm text-ink">{item.body}</div>
+              <div className="whitespace-pre-wrap text-sm text-ink">{renderBody(item.body)}</div>
             </div>
           </li>
         );

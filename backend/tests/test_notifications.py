@@ -62,6 +62,75 @@ def test_mention_notifies_user(client, auth, make_requirement, data):
     assert any(n["type"] == "mentioned" for n in mem_n)
 
 
+# —— mention-autocomplete（spec §6.1）：@提及左边界、去重、富文案、共存契约 ——
+
+def test_mention_inside_email_not_triggered(client, auth, make_requirement, data):
+    # 邮箱 name@member.com 的 @member 左邻为拉丁词字符 e → 左边界断言拦截，member 不被误提及。
+    req = make_requirement()
+    client.post(f"/api/requirements/{req['id']}/comments",
+                json={"body": "联系 name@member.com 即可"}, headers=auth("pm"))
+    mem_n = client.get("/api/notifications?unread=1", headers=auth("member")).get_json()
+    assert not any(n["type"] == "mentioned" for n in mem_n)
+
+
+def test_mention_dedupes_repeated(client, auth, make_requirement, data):
+    # 同一人被重复 @ → set 去重，恰好 1 条 mentioned。
+    req = make_requirement()
+    client.post(f"/api/requirements/{req['id']}/comments",
+                json={"body": "@member @member 看下"}, headers=auth("pm"))
+    mem_n = client.get("/api/notifications", headers=auth("member")).get_json()
+    mentions = [n for n in mem_n if n["type"] == "mentioned" and n["entity_id"] == req["id"]]
+    assert len(mentions) == 1
+
+
+def test_mention_nonexistent_user_no_notification(client, auth, make_requirement, data):
+    # @未知用户 → 不报错（201）、不产生任何 mentioned 通知。
+    req = make_requirement()
+    r = client.post(f"/api/requirements/{req['id']}/comments",
+                    json={"body": "@nobody 在吗"}, headers=auth("pm"))
+    assert r.status_code == 201
+    for role in ("member", "member2"):
+        notes = client.get("/api/notifications", headers=auth(role)).get_json()
+        assert not any(n["type"] == "mentioned" for n in notes)
+
+
+def test_mention_resolves_by_username_not_display_name(client, auth, make_requirement, data):
+    # member 的 display_name 是 Mia、username 是 member；@Mia 不命中、@member 命中。
+    # 锁死「补全必须插入 username」这一前后端契约。
+    req = make_requirement()
+    client.post(f"/api/requirements/{req['id']}/comments",
+                json={"body": "@Mia 看下"}, headers=auth("pm"))
+    before = client.get("/api/notifications?unread=1", headers=auth("member")).get_json()
+    assert not any(n["type"] == "mentioned" for n in before)
+    client.post(f"/api/requirements/{req['id']}/comments",
+                json={"body": "@member 看下"}, headers=auth("pm"))
+    after = client.get("/api/notifications?unread=1", headers=auth("member")).get_json()
+    assert any(n["type"] == "mentioned" for n in after)
+
+
+def test_mention_message_includes_title(client, auth, make_requirement, data):
+    # 富文案：mentioned 通知 message 携带工单标题片段（与 notify_comment 信息密度对齐）。
+    req = make_requirement(title="登录页体验优化")
+    client.post(f"/api/requirements/{req['id']}/comments",
+                json={"body": "@member 看下"}, headers=auth("pm"))
+    mem_n = client.get("/api/notifications", headers=auth("member")).get_json()
+    mentions = [n for n in mem_n if n["type"] == "mentioned" and n["entity_id"] == req["id"]]
+    assert mentions
+    assert "登录页体验优化" in mentions[0]["message"]
+
+
+def test_mention_and_comment_coexist_for_participant(client, auth, make_requirement, data):
+    # member 是人类 assignee（commented 收件人）且被 @（mentioned）→ 两类各恰好 1 条，互不吞没。
+    # 【spec §2.4 P1-2】显式契约：mentioned 与 commented 语义不同，本轮有意并存。
+    req = make_requirement(assignee=("user", data["member_id"]))
+    client.post(f"/api/requirements/{req['id']}/comments",
+                json={"body": "@member 看下"}, headers=auth("pm"))
+    mem_n = client.get("/api/notifications", headers=auth("member")).get_json()
+    scoped = [n for n in mem_n if n["entity_id"] == req["id"]]
+    assert len([n for n in scoped if n["type"] == "mentioned"]) == 1
+    assert len([n for n in scoped if n["type"] == "commented"]) == 1
+
+
 def test_unread_count_and_read_flow(client, auth, make_requirement, data):
     req = make_requirement()
     # 给 member 造两条：指派 + 评论。

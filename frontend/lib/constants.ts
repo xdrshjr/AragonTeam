@@ -148,6 +148,13 @@ export function notificationIcon(type: string): string {
   return NOTIFICATION_ICONS[type] || "🔔";
 }
 
+// —— mention-autocomplete：评论正文 @提及渲染切分 ——
+// 时间线渲染用：把评论正文里的 @token 标为 chip；字符集与后端解析口径一致。
+// 【P2-1】带 /g，仅供 String.prototype.matchAll（无状态）使用；禁止对其调用
+// .test()/.exec()——全局正则的 lastIndex 会跨调用残留、引发间歇性错配。
+// 需要「单个 username 是否可解析」的判定请用新鲜字面量 /^[A-Za-z0-9_]+$/（见 MentionTextarea 候选硬过滤）。
+export const MENTION_RE = /@([A-Za-z0-9_]+)/g;
+
 // —— Phase-3：Agent 自主运行结果 → 一句话概要（toast 用）——
 export function autopilotSummary(name: string, opts: {
   claimed?: number;
