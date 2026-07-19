@@ -10,6 +10,7 @@ from routes.stats import bp as stats_bp
 from routes.comments import bp as comments_bp
 from routes.notifications import bp as notifications_bp
 from routes.me import bp as me_bp
+from routes.search import bp as search_bp
 
 
 def register_blueprints(app):
@@ -25,3 +26,5 @@ def register_blueprints(app):
     # —— Phase-3：通知中心 + 「我的工作」〔R3-02：me 蓝图独立前缀 /api/me〕——
     app.register_blueprint(notifications_bp)
     app.register_blueprint(me_bp)
+    # —— global-search（Iter3）：跨需求+BUG 聚合搜索，独立前缀 /api/search ——
+    app.register_blueprint(search_bp)

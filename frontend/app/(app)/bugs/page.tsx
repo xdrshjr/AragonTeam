@@ -36,12 +36,21 @@ export default function BugsPage() {
     assignee_id: null,
   });
 
+  // Header 全局搜索：跨页导航时携带 ?q=（进入页面 mount 读取）；已在本页时靠事件即时刷新（B6，与需求页对称）。
   useEffect(() => {
     const q = new URLSearchParams(window.location.search).get("q") || "";
     if (q) {
       setKeyword(q);
       setDebounced(q);
     }
+    function onSearch(e: Event) {
+      const term = (e as CustomEvent<string>).detail?.trim();
+      if (!term) return;
+      setKeyword(term);
+      setDebounced(term);
+    }
+    window.addEventListener("aragon:search", onSearch);
+    return () => window.removeEventListener("aragon:search", onSearch);
   }, []);
 
   useEffect(() => {

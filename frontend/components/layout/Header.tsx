@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { ROLE_LABELS } from "@/lib/constants";
 import Avatar from "@/components/ui/Avatar";
+import GlobalSearch from "@/components/layout/GlobalSearch";
 import NotificationBell from "@/components/notifications/NotificationBell";
 
 interface Props {
@@ -17,9 +18,7 @@ export default function Header({ title, subtitle, action }: Props) {
   const { user, logout } = useAuth();
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
   const menuRef = useRef<HTMLDivElement>(null);
-  const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     function onClick(e: MouseEvent) {
@@ -30,29 +29,6 @@ export default function Header({ title, subtitle, action }: Props) {
     document.addEventListener("mousedown", onClick);
     return () => document.removeEventListener("mousedown", onClick);
   }, []);
-
-  // 全局搜索键盘可达（§2.7）：`/` 聚焦搜索（非输入框内时），Esc 清空并失焦。
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      const tag = (e.target as HTMLElement)?.tagName;
-      const typing = tag === "INPUT" || tag === "TEXTAREA";
-      if (e.key === "/" && !typing) {
-        e.preventDefault();
-        searchRef.current?.focus();
-      }
-    }
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, []);
-
-  function runSearch() {
-    const q = query.trim();
-    if (!q) return;
-    router.push(`/requirements?q=${encodeURIComponent(q)}`);
-    // 若已在需求列表页，同路由 push 不会重挂载页面、其 mount 读取不触发；
-    // 派发事件让已挂载的列表页即时刷新过滤条（§2.6，与看板 window.location 同为「不引 Suspense」策略）。
-    window.dispatchEvent(new CustomEvent<string>("aragon:search", { detail: q }));
-  }
 
   function onLogout() {
     logout();
@@ -67,31 +43,7 @@ export default function Header({ title, subtitle, action }: Props) {
       </div>
 
       <div className="flex items-center gap-3">
-        {/* 全局搜索框 */}
-        <div className="relative hidden md:block">
-          <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-muted/70">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                 strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="11" cy="11" r="8" />
-              <path d="m21 21-4.3-4.3" />
-            </svg>
-          </span>
-          <input
-            ref={searchRef}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") runSearch();
-              if (e.key === "Escape") {
-                setQuery("");
-                searchRef.current?.blur();
-              }
-            }}
-            placeholder="搜索需求 / BUG…（/）"
-            aria-label="全局搜索"
-            className="h-9 w-56 rounded-lg border border-border bg-bg pl-9 pr-3 text-sm text-ink placeholder:text-ink-muted/60 focus:border-clay focus:outline-none focus:ring-2 focus:ring-clay/20"
-          />
-        </div>
+        <GlobalSearch />
 
         {action}
 

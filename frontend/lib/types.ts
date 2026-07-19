@@ -273,3 +273,11 @@ export interface ProfileUpdate {
   email?: string;
   avatar_color?: string;
 }
+
+// —— global-search：统一搜索（GET /api/search 响应）——
+export interface SearchResults {
+  query: string;
+  requirements: Requirement[];
+  bugs: Bug[];
+  counts: { requirements: number; bugs: number };
+}
