@@ -4,9 +4,10 @@ from flask_jwt_extended import jwt_required
 
 from extensions import db
 from models.user import User, ROLES
+from services import lifecycle
 from services.auth_helpers import require_role
 from services.pagination import paginate, with_total_count
-from services.validation import json_body, want_str, ValidationError
+from services.validation import json_body, want_bool, want_str, ValidationError
 from routes.auth import _pick_color
 from routes.me import _EMAIL_RE
 
@@ -74,16 +75,39 @@ def patch_user(user_id):
         return jsonify({"error": "user not found"}), 404
     data = json_body()
 
-    if "role" in data:
-        user.role = want_str(data, "role", required=True, choices=ROLES)
+    # 【lifecycle-and-governance §2.2】末任管理员不变量：降级与停用是同一个治理死锁的
+    # 两张脸（admin 数归零后 POST /users、POST /auth/register、PATCH /users/:id 三个
+    # 端点同时且永久地失去唯一的合法调用者，产品内无恢复路径），故在改任何字段**之前**
+    # 用同一个守卫判定一次。命中返回 409（请求本身合法，是系统状态不允许）。
+    new_role = want_str(data, "role", required=True, choices=ROLES) if "role" in data else None
+    new_active = want_bool(data, "is_active", required=True) if "is_active" in data else None
+    if (new_role is not None or new_active is not None) and \
+            lifecycle.would_orphan_admins(user, new_role=new_role, new_active=new_active):
+        return lifecycle.conflict_last_admin()
+
+    changed = False
+    if new_role is not None:
+        user.role = new_role
+        changed = True
+    if new_active is not None:
+        user.is_active = new_active
+        changed = True
     if "display_name" in data:
         # 非串 display_name → 400（此前直接赋值，落库后 to_dict 类型脏）；超长 → 400（§2.6③）。
         user.display_name = want_str(data, "display_name", max_len=128)
+        changed = True
     if "email" in data:
         # 【§2.4-C2 / §2.6③】非串 / 超长 / 格式非法 → 400；空 → None。
         user.email = _want_email(data)
+        changed = True
     if data.get("password"):
         user.set_password(want_str(data, "password", strip=False, required=True))
+        changed = True
+
+    # 【P2-5】与 patch_requirement 的 changed 模式对齐：此前无字段被识别仍返 200 +
+    # 完整用户体，管理员以为改了、其实什么都没发生（与 §2.4-B2 同类的「静默成功」）。
+    if not changed:
+        return jsonify({"error": "no updatable field"}), 400
 
     db.session.commit()
     return jsonify(user.to_dict()), 200

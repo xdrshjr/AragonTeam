@@ -2,7 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useSWRConfig } from "swr";
 import { ApiError } from "@/lib/api";
+import { invalidateTicketViews } from "@/lib/swr-keys";
+import { useOverlayLayer } from "@/lib/overlay-stack";
 import { useToast } from "@/lib/toast";
 import { useAuth } from "@/lib/auth";
 import { useTicket } from "@/hooks/useTicket";
@@ -18,6 +21,8 @@ import FeedTimeline from "@/components/collab/FeedTimeline";
 import CommentComposer from "@/components/collab/CommentComposer";
 import { SkeletonDrawer } from "@/components/ui/Skeleton";
 import ErrorState from "@/components/ui/ErrorState";
+import ConfirmDialog from "@/components/ui/ConfirmDialog";
+import DocumentPanel from "@/components/documents/DocumentPanel";
 
 type Entity = "requirements" | "bugs";
 
@@ -54,20 +59,28 @@ export default function TicketDrawer({ entity, id, onClose, onChanged }: Props) 
   const { user } = useAuth();
   const { projects } = useProjectScope();
   const isBug = entity === "bugs";
+  const { mutate } = useSWRConfig();
   const {
     ticket, feed, isLoading, error: ticketError,
-    refresh, addComment, advanceAgent, assign, patch, convertToBug,
+    refresh, addComment, advanceAgent, assign, patch, convertToBug, remove,
   } = useTicket(entity, id);
 
   const [entered, setEntered] = useState(false);
   const [advancing, setAdvancing] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [savingDetails, setSavingDetails] = useState(false);
   const [titleInput, setTitleInput] = useState("");
   const [descInput, setDescInput] = useState("");
 
+  const [droppedFiles, setDroppedFiles] = useState<File[] | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+
   const panelRef = useRef<HTMLDivElement>(null);
   const restoreRef = useRef<HTMLElement | null>(null);
   const loadedRef = useRef<number | null>(null);
+
+  // 抽屉是层栈的底层：模态开在它之上，Esc 与滚动锁的仲裁都经这里。
+  const layer = useOverlayLayer(id != null);
 
   // 进出滑动动画（enter）。
   useEffect(() => {
@@ -81,19 +94,19 @@ export default function TicketDrawer({ entity, id, onClose, onChanged }: Props) 
   }, [id]);
 
   // Esc 关闭 + 打开时锁滚动。
+  //
+  // 【ticket-document-management §6.4 / 评审 R9】这个 window 级监听是本轮**唯一**必须
+  // 改动的既有 a11y 代码：本轮的预览 / 编辑模态都开在抽屉之内，若它继续无条件响应 Esc，
+  // 按一下就会把模态与抽屉一起关掉。现在先过层栈判定——只有栈顶层才消费 Esc。
+  // 滚动锁同样交给层栈按引用计数管理，不再各层自行 set/restore `body.style`。
   useEffect(() => {
     if (id == null) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape" && layer.isTop()) onClose();
     };
     window.addEventListener("keydown", onKey);
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      document.body.style.overflow = prev;
-    };
-  }, [id, onClose]);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [id, onClose, layer]);
 
   // 焦点管理：打开移入面板，关闭归还触发元素。
   useEffect(() => {
@@ -158,17 +171,24 @@ export default function TicketDrawer({ entity, id, onClose, onChanged }: Props) 
   }
 
   async function onAssignChange(v: AssigneeValue) {
-    if (!v.assignee_type || v.assignee_id == null) {
-      toast.info("暂不支持在此取消指派");
-      return;
-    }
+    // 【lifecycle-and-governance §2.4-B2】「未指派」真正生效：此前这里弹一句
+    // 「暂不支持在此取消指派」就返回，把一个渲染出来的选项做成了死控件。
+    const clearing = !v.assignee_type || v.assignee_id == null;
     try {
       await assign(v);
-      toast.success("指派已更新");
+      toast.success(clearing ? "已取消指派" : "指派已更新");
       onChanged?.();
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "指派失败");
+      toast.error(err instanceof ApiError ? err.message : clearing ? "取消指派失败" : "指派失败");
     }
+  }
+
+  async function onDelete() {
+    await remove();
+    toast.success("已删除");
+    onClose();          // 抽屉必须关闭：其 SWR key 已 404
+    invalidateTicketViews(mutate);
+    onChanged?.();      // 外层列表 / 看板自身的 mutate
   }
 
   // 【Phase-3 §2.5】并发冲突（409 且无 allowed）→ 提示刷新并拉取最新，区别于状态机 409。
@@ -235,6 +255,12 @@ export default function TicketDrawer({ entity, id, onClose, onChanged }: Props) 
     // 评论不改看板，仅刷新 feed（已在 hook 内 mutate）。
   }
 
+  // 确认文案要写清级联范围（§2.4-B1）：评论条数直接数 feed，不额外发请求。
+  const commentCount = (feed?.items ?? []).filter((i) => i.kind === "comment").length;
+  // 【§6.4】删除确认必须如实说明「文档不会被删」——对用户真实数据的推定是保留，
+  // 而一句没说清的确认文案会让用户以为自己刚刚毁掉了一份 PRD。
+  const documentCount = ticket?.document_count ?? 0;
+
   const prefix = isBug ? "BUG" : "REQ";
   const levelOptions = isBug ? SEVERITY_OPTIONS : PRIORITY_OPTIONS;
   const levelValue = ticket
@@ -262,7 +288,25 @@ export default function TicketDrawer({ entity, id, onClose, onChanged }: Props) 
           "absolute inset-y-0 right-0 flex w-full max-w-[480px] flex-col bg-bg shadow-lift outline-none",
           "transition-transform duration-200 ease-out",
           entered ? "translate-x-0" : "translate-x-full",
+          dragOver ? "ring-2 ring-clay/40" : "",
         ].join(" ")}
+        onDragOver={(e) => {
+          // 【§6.3】拖放区是**整个抽屉面板**，不只是那条虚线框：用户拖着文件时
+          // 的目标是「这张单」，不是「那个小方框」。
+          if (!canManage) return;
+          e.preventDefault();
+          setDragOver(true);
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(false);
+        }}
+        onDrop={(e) => {
+          if (!canManage) return;
+          e.preventDefault();
+          setDragOver(false);
+          const files = Array.from(e.dataTransfer.files || []);
+          if (files.length) setDroppedFiles(files);
+        }}
       >
         {/* Header */}
         <div className="flex items-start justify-between gap-3 border-b border-border bg-surface px-5 py-4">
@@ -378,6 +422,17 @@ export default function TicketDrawer({ entity, id, onClose, onChanged }: Props) 
                 )}
               </section>
 
+              {/* 文档区（置于「协作时间线」之上：文档是流转的输入，时间线是流转的结果，
+                  用户的阅读动线应当先看材料再看过程，§6.1）。 */}
+              <DocumentPanel
+                entity={entity}
+                id={ticket.id}
+                canManage={canManage}
+                onChanged={onChanged}
+                droppedFiles={droppedFiles}
+                onDroppedConsumed={() => setDroppedFiles(null)}
+              />
+
               {/* 协作区 */}
               <section className="px-5 py-4">
                 <div className="mb-3 flex items-center justify-between">
@@ -396,6 +451,24 @@ export default function TicketDrawer({ entity, id, onClose, onChanged }: Props) 
                   <FeedTimeline items={feed?.items ?? []} />
                 )}
               </section>
+
+              {/* 【§2.4-B1】危险区：删除入口只放在「已经打开、已经读过内容」的抽屉里，
+                  不放到看板卡片 / 列表行上——那里与「指派」相邻，误触代价不对等。 */}
+              {canAssign && (
+                <section className="border-t border-border px-5 py-4">
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-muted">
+                    危险区
+                  </h3>
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <p className="text-xs text-ink-muted">
+                      删除后不可恢复，其评论与协作时间线会一并清除。
+                    </p>
+                    <Button size="sm" variant="danger" onClick={() => setConfirmingDelete(true)}>
+                      删除此{isBug ? " BUG" : "需求"}
+                    </Button>
+                  </div>
+                </section>
+              )}
             </div>
 
             {/* 评论输入（固定底部） */}
@@ -405,6 +478,29 @@ export default function TicketDrawer({ entity, id, onClose, onChanged }: Props) 
           </>
         )}
       </div>
+
+      <ConfirmDialog
+        open={confirmingDelete}
+        title={`删除${isBug ? " BUG" : "需求"} ${prefix}-${id}`}
+        description={
+          <>
+            将永久删除「{ticket?.title}」，
+            <strong className="text-ink">
+              连同它的 {commentCount} 条评论与全部协作时间线
+            </strong>
+            ，且不可恢复。
+            {documentCount > 0 && (
+              <>
+                {" "}
+                其绑定的 <strong className="text-ink">{documentCount} 份文档不会被删除</strong>
+                ，将保留在文档库中。
+              </>
+            )}
+          </>
+        }
+        onConfirm={onDelete}
+        onClose={() => setConfirmingDelete(false)}
+      />
     </div>
   );
 }

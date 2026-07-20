@@ -7,6 +7,7 @@ import { AGENTS_KEY, api, swrFetcher, listFetcher, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/lib/toast";
 import { useProjectScope } from "@/lib/project-scope";
+import { invalidateAdminViews, invalidateTicketViews } from "@/lib/swr-keys";
 import type {
   Agent,
   Requirement,
@@ -22,6 +23,7 @@ import Header from "@/components/layout/Header";
 import Button from "@/components/ui/Button";
 import Avatar from "@/components/ui/Avatar";
 import ErrorState from "@/components/ui/ErrorState";
+import ConfirmDialog from "@/components/ui/ConfirmDialog";
 import AgentFormModal, { AgentFormState } from "@/components/admin/AgentFormModal";
 
 const STATUS_DOT: Record<string, string> = {
@@ -54,19 +56,18 @@ export default function AgentsPage() {
   const [teamBusy, setTeamBusy] = useState(false);
   // 建 / 改 Agent 弹窗（后端 POST/PATCH 限 pm/admin，member 隐藏所有写入口）。
   const [form, setForm] = useState<AgentFormState | null>(null);
+  // 删除 Agent 的二次确认（lifecycle-and-governance §2.7）。
+  const [deleting, setDeleting] = useState<Agent | null>(null);
 
   // 自主运行后刷新看板 / 列表 / Agent / 仪表盘 / 未读数。
   // 【§2.5-A1】负载用的 key 已换成带过滤的专用 key，mutate 必须同步，否则运行后负载不刷新。
   function revalidateAll() {
     // 用**前缀函数式 key** 而非字面量清单：这些 key 现在都可能带 ?project_id= / ?limit= 等
     // 后缀（scale-and-project-scope §2.4），逐条写死会在切换项目后静默漏刷。
-    mutate(
-      (key) =>
-        typeof key === "string" &&
-        ["/agents", "/requirements", "/bugs", "/stats", "/board/", "/notifications"].some((p) =>
-          key.startsWith(p)
-        )
-    );
+    // 【lifecycle-and-governance §2.4】前缀清单已提取到 lib/swr-keys.ts 供三处共用，
+    // 不再各页手抄一份（本页曾是那份「已验证的写法」的出处）。
+    invalidateTicketViews(mutate);
+    invalidateAdminViews(mutate);
   }
 
   function workload(agentId: number) {
@@ -133,6 +134,29 @@ export default function AgentsPage() {
     } finally {
       setBusyId(null);
     }
+  }
+
+  /** 把后端 409 的 detail 计数渲染成中文，而不是把英文原文丢给用户（§2.7）。 */
+  function openWorkloadMessage(agentName: string, detail: unknown): string {
+    const d = detail as { requirements?: number; bugs?: number } | null;
+    const parts: string[] = [];
+    if (d?.requirements) parts.push(`${d.requirements} 个需求`);
+    if (d?.bugs) parts.push(`${d.bugs} 个 BUG`);
+    const load = parts.length ? parts.join("、") : "工单";
+    return `${agentName} 名下还有${load}在手，请先改派或取消指派后再删除。`;
+  }
+
+  async function onDeleteAgent(a: Agent) {
+    try {
+      await api.del(`/agents/${a.id}`);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        throw new ApiError(409, openWorkloadMessage(a.name, err.detail), err.detail);
+      }
+      throw err;
+    }
+    toast.success(`${a.name} 已删除`);
+    revalidateAll();
   }
 
   async function onRunTeam() {
@@ -235,6 +259,11 @@ export default function AgentsPage() {
                     <Button size="sm" variant="ghost" onClick={() => setForm({ mode: "edit", agent: a })}>
                       编辑
                     </Button>
+                    {/* 【lifecycle-and-governance §2.7】删除：名下仍有未终态工单时后端 409，
+                        计数由 ConfirmDialog 就地显示（不弹一个转瞬即逝的英文 toast）。 */}
+                    <Button size="sm" variant="danger" onClick={() => setDeleting(a)} disabled={running}>
+                      删除
+                    </Button>
                   </div>
                 )}
 
@@ -282,6 +311,20 @@ export default function AgentsPage() {
           setForm(null);
           mutate(AGENTS_KEY);
         }}
+      />
+
+      <ConfirmDialog
+        open={!!deleting}
+        title="删除 Agent"
+        description={
+          <>
+            将永久删除 Agent「{deleting?.name}」，<strong className="text-ink">不可恢复</strong>。
+            它已参与过的评论与时间线会保留，作者显示为「(已删除)」。
+            若它名下仍有未完成的工单，删除会被拒绝。
+          </>
+        }
+        onConfirm={() => onDeleteAgent(deleting as Agent)}
+        onClose={() => setDeleting(null)}
       />
     </>
   );

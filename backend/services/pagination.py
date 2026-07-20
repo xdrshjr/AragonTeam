@@ -10,11 +10,17 @@ DEFAULT_LIMIT = 50
 MAX_LIMIT = 200
 
 
-def paginate(query):
+def paginate(query, *, default_limit: int = DEFAULT_LIMIT):
     """按 `?limit=`（默认 50、上限 200）与 `?offset=`（默认 0）分页。
 
     返回 (rows, total)。total 为**未分页前**的总数，供 X-Total-Count。
     传入的 query 可已带 order_by；count 时去序以省一次无谓排序。
+
+    Args:
+        query: 任意 SQLAlchemy Query。
+        default_limit: 调用方缺省 `?limit=` 时的默认条数（additive，默认 50，既有调用点
+            逐字节不变）。工单时间线用 MAX_LIMIT 作默认，把「加分页 = 默认只返 50 条」
+            这一截断语义变更的风险降到最低（lifecycle-and-governance §7 R-5）。
 
     【scale-and-project-scope §2.4 / 评审 R1】两个参数改走 `want_query_int`：
     超界值此前被绑进 `.offset()` 触 OverflowError → 500，**波及每一个列表端点**；
@@ -23,7 +29,7 @@ def paginate(query):
     主键绑进 SQL，是「上限」而非「取值」；见 spec 验收 D3 的对照组）；非整数 `limit` 由
     「静默忽略」收紧为 400（§2.9-G2）。`offset` 为负由「静默归零」收紧为 400。
     """
-    limit = want_query_int("limit", default=DEFAULT_LIMIT,
+    limit = want_query_int("limit", default=default_limit,
                            minimum=1, maximum=MAX_LIMIT, clamp=True)
     offset = want_query_int("offset", default=0, minimum=0)
 

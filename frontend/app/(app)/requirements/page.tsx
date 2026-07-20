@@ -213,6 +213,9 @@ export default function RequirementsPage() {
                   <th className="px-4 py-3 font-medium">状态</th>
                   <th className="px-4 py-3 font-medium">优先级</th>
                   <th className="px-4 py-3 font-medium">负责人</th>
+                  {/* 【ticket-document-management §3.5】文档数列：只读指示，与看板的
+                      回形针徽章同源（后端 additive `document_count`）。 */}
+                  <th className="px-4 py-3 font-medium">文档</th>
                   {canAssign && <th className="px-4 py-3 font-medium text-right">操作</th>}
                 </tr>
               </thead>
@@ -251,6 +254,19 @@ export default function RequirementsPage() {
                           {r.assignee ? r.assignee.name : "未指派"}
                         </span>
                       </div>
+                    </td>
+                    <td className="px-4 py-3 text-ink-muted">
+                      {(r.document_count ?? 0) > 0 ? (
+                        <span
+                          title={`${(r.document_count)} 份文档`}
+                          className="inline-flex items-center gap-0.5"
+                        >
+                          <span aria-hidden="true">📎</span>
+                          {r.document_count}
+                        </span>
+                      ) : (
+                        <span className="text-ink-muted/50">—</span>
+                      )}
                     </td>
                     {canAssign && (
                       <td className="px-4 py-3 text-right">

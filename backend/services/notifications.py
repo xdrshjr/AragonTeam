@@ -34,6 +34,12 @@ def _short(text, limit: int = 40) -> str:
     return s if len(s) <= limit else s[:limit] + "…"
 
 
+def short_text(text, limit: int = 40) -> str:
+    """`_short` 的公开别名：供 services/lifecycle.py 复用同一套标题截断策略，
+    避免第二份「截断到 40 字」的手搓实现（lifecycle-and-governance §2.4-B2）。"""
+    return _short(text, limit)
+
+
 def _clip(message: str, limit: int = 255) -> str:
     return message if len(message) <= limit else message[: limit - 1] + "…"
 
@@ -51,6 +57,14 @@ def notify(user_id, type, *, entity_type=None, entity_id=None, actor=None, messa
     # 偏好闸（account-settings §3.1）：收件人显式静音该类型则不落库；缺省全开，
     # 故无人静音时行为逐字节不变。读包在 no_autoflush 内，不打扰当前写事务。
     if not notification_prefs.is_enabled(user_id, type):
+        return None
+    # 【lifecycle-and-governance §2.5】已停用的收件人不落库：他再也不会登录，
+    # 给他堆通知只会让未读数与 /stats 说谎。与上面两条跳过条件并列。
+    # 读同样包在 no_autoflush 内（与 notification_prefs.is_enabled 同款收敛）：
+    # notify() 处于写事务中，此 SELECT 不得触发 autoflush 提前刷未完成对象。
+    with db.session.no_autoflush:
+        recipient = db.session.get(User, user_id)
+    if recipient is None or not recipient.is_active:
         return None
     n = Notification(
         user_id=user_id,
@@ -100,12 +114,16 @@ def notify_claim(ticket, entity, agent):
 def notify_comment(ticket, entity, comment, actor):
     """评论后 → 通知 reporter + 当前人类 assignee + 历史人类评论人（去重、排除作者本人）。"""
     recipients = _ticket_humans(ticket)
-    prior = Comment.query.filter_by(
-        entity_type=entity, entity_id=ticket.id, author_type="user"
-    ).all()
-    for c in prior:
-        if c.author_id is not None:
-            recipients.add(c.author_id)
+    # 【P2-2】只取 DISTINCT author_id：此前全量取回该单历史评论（含 body）只为求一个
+    # id 集合，评论一多就是无谓的搬运。语义逐字节不变。
+    prior = db.session.query(Comment.author_id).filter(
+        Comment.entity_type == entity,
+        Comment.entity_id == ticket.id,
+        Comment.author_type == "user",
+        Comment.author_id.isnot(None),
+    ).distinct().all()
+    for (author_id,) in prior:
+        recipients.add(author_id)
     snippet = _short(comment.body, 30)
     for uid in recipients:
         notify(
@@ -143,6 +161,25 @@ def notify_convert(src_req, new_bug, actor):
             uid, "converted",
             entity_type="requirement", entity_id=src_req.id, actor=actor,
             message=f"需求「{_short(src_req.title)}」已转为 BUG #{new_bug.id}",
+        )
+
+
+def notify_document(ticket, entity, document, actor, message=None):
+    """文档被上传 / 绑定 / 改版后 → 通知 reporter + 人类 assignee（排除 actor）。
+
+    收件人与「不给自己发 / 不给 Agent 发 / 停用用户不落库 / 偏好闸」四条跳过条件
+    全部复用既有 `notify()` —— 一行都不用重写（ticket-document-management §2.5）。
+
+    **解除绑定刻意不调用本函数**：它是一次收敛性操作（东西变少了），给所有人推一条
+    通知只会制造噪音；时间线上有留痕，需要追责时查得到，这个强度是合适的。
+    """
+    text = message or f"{_label(entity)}「{_short(getattr(ticket, 'title', ''))}」" \
+                      f"新增文档「{_short(document.title)}」"
+    for uid in _ticket_humans(ticket):
+        notify(
+            uid, "document_added",
+            entity_type=entity, entity_id=ticket.id, actor=actor,
+            message=text,
         )
 
 

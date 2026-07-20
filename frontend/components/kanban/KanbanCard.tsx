@@ -81,7 +81,21 @@ export default function KanbanCard({
       </div>
 
       <div className="flex items-center justify-between">
-        <AssigneeAvatar assignee={card.assignee} size={24} />
+        <div className="flex items-center gap-1.5">
+          <AssigneeAvatar assignee={card.assignee} size={24} />
+          {/* 【ticket-document-management §6.1】回形针 + 数字，**只读**：点击不做任何事
+              （打开工单才是唯一入口），避免在卡片上堆第二种点击语义。 */}
+          {(card.document_count ?? 0) > 0 && (
+            <span
+              title={`${card.document_count} 份文档`}
+              aria-label={`${card.document_count} 份文档`}
+              className="inline-flex items-center gap-0.5 rounded-md bg-black/[0.045] px-1.5 py-0.5 text-xs text-ink-muted"
+            >
+              <span aria-hidden="true">📎</span>
+              {card.document_count}
+            </span>
+          )}
+        </div>
         {isBug(card) && card.related_requirement_id && (
           <span className="text-xs text-ink-muted">
             源需求 #{card.related_requirement_id}

@@ -210,6 +210,9 @@ export default function BugsPage() {
                   <th className="px-4 py-3 font-medium">状态</th>
                   <th className="px-4 py-3 font-medium">严重度</th>
                   <th className="px-4 py-3 font-medium">负责人</th>
+                  {/* 【ticket-document-management §3.5】文档数列：只读指示，与看板的
+                      回形针徽章同源（后端 additive `document_count`）。 */}
+                  <th className="px-4 py-3 font-medium">文档</th>
                   <th className="px-4 py-3 font-medium">源需求</th>
                   {canAssign && <th className="px-4 py-3 font-medium text-right">操作</th>}
                 </tr>
@@ -249,6 +252,19 @@ export default function BugsPage() {
                           {b.assignee ? b.assignee.name : "未指派"}
                         </span>
                       </div>
+                    </td>
+                    <td className="px-4 py-3 text-ink-muted">
+                      {(b.document_count ?? 0) > 0 ? (
+                        <span
+                          title={`${(b.document_count)} 份文档`}
+                          className="inline-flex items-center gap-0.5"
+                        >
+                          <span aria-hidden="true">📎</span>
+                          {b.document_count}
+                        </span>
+                      ) : (
+                        <span className="text-ink-muted/50">—</span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-ink-muted">
                       {b.related_requirement_id ? `REQ-${b.related_requirement_id}` : "—"}

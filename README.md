@@ -89,11 +89,15 @@ npm run dev
 | 用户名 | 密码 | 角色 |
 |---|---|---|
 | `admin` | `admin123` | 管理员 |
-| `pm` | `pm123` | 项目经理 |
-| `alice` | `alice123` | 成员 |
-| `bob` | `bob123` | 成员 |
 
-内置 Agent：`dev-agent`（开发）、`qa-agent`（测试）。
+内置 Agent：`dev-agent`（开发）。
+
+首启的示例数据**每类只有一条**（1 账号 / 1 Agent / 1 项目 / 1 需求 / 1 BUG /
+1 评论 / 1 审计 / 1 通知，共 8 行）。其余成员请登录后在「团队」页创建；需要演示
+dev→qa 交接时，在「Agents」页一键新建一个 `qa` Agent 即可。示例工单一律是
+未指派的初始状态（`new` / `open`），不会一启动就卡在中间列。
+
+详见下文「示例数据与清理」。
 
 ---
 
@@ -156,10 +160,12 @@ npm run build       # next build
 | `SECRET_KEY` | `aragon-dev-secret-change-me` | Flask 密钥（生产务必覆盖）|
 | `JWT_SECRET_KEY` | `aragon-dev-jwt-secret-change-me` | JWT 签名密钥（生产务必覆盖）|
 | `JWT_ACCESS_TOKEN_EXPIRES` | `86400`（秒）| 访问令牌有效期 |
-| `DATABASE_URL` | `sqlite:///backend/aragon.db` | 数据库 URI（沿用既有名）|
+| `DATABASE_URL` | `sqlite:///<repo>/backend/aragon.db` | 数据库 URI（沿用既有名）。默认值由 `backend/config.py` **所在目录**解析为绝对路径，从任何工作目录启动都命中同一个文件；若自行覆盖，**请也写绝对路径**，相对路径会随工作目录漂移出第二个库，表现就是「数据莫名消失了」|
 | `CORS_ORIGINS` | `http://localhost:3000` | 允许的前端 origin（逗号分隔）|
 | `LOGIN_MAX_ATTEMPTS` | `10` | 登录限流阈值（5 分钟窗口内失败上限）|
 | `SEED_ON_STARTUP` | `true` | 启动时是否幂等 seed（测试关闭）|
+| `RELEASE_STALE_LOCKS_ON_STARTUP` | `true` | 启动时解开崩溃残留的 Agent `busy` 软锁；多 worker 部署必须置 `false` |
+| `SQLITE_SYNCHRONOUS` | `NORMAL` | SQLite 落盘同步级别（`OFF`/`NORMAL`/`FULL`/`EXTRA`）；对掉电零容忍时设 `FULL` |
 
 前端：`NEXT_PUBLIC_API_BASE`（默认 `http://localhost:5000/api`）。
 
@@ -363,3 +369,276 @@ npm run build        # next build → 16/16 页成功
 ```
 
 更多设计细节见 [`docs/plans/scale-and-project-scope/spec.md`](docs/plans/scale-and-project-scope/spec.md)。
+
+
+## 生命周期闭环与治理安全（Lifecycle & Governance）—— 改得动、撤得回、删得掉、停得住
+
+第 4 轮换一个观察角度：前三轮闭合的是「点了会报错」，本轮闭合的是**「做错了没有回头路」**与
+**「后端有能力、客户端够不着」**。零新表、零新运行时依赖、成功路径响应 shape 只增不改，
+状态机（`services/workflow.py` 的两张邻接表）一字未动——删除 / 停用 / 归档全都**不触碰 `status`**。
+
+- **启动期 additive 加列迁移器（本轮的硬前置）**：`db.create_all()` 只建**不存在的表**，对已存在的表
+  一列都不会加。项目至今没加过列，因此本轮新增 `users.is_active` / `projects.archived_at` 会让存量
+  `aragon.db` 的每一次查询都 `no such column` → 500，连登录都进不去。新增
+  `backend/services/schema_sync.py`：启动时对照 `inspect(engine)` 的实际列集合补齐差额，幂等、可日志、
+  零新依赖。**能力边界写死在模块 docstring 里：只支持 ADD COLUMN。**
+- **末任管理员不变量**：唯一的管理员此前可以把自己降级成普通成员，此后 `POST /api/users`、
+  `POST /api/auth/register`、`PATCH /api/users/:id` 三个 `@require_role("admin")` 端点同时且永久地
+  失去唯一的合法调用者——产品内没有任何恢复路径。现在降级 / 停用最后一位**有效**管理员一律 **409**
+  （停用的 admin 不计入有效数，二者是同一个死锁的两张脸，由同一个守卫拦下）。
+- **成员停用 / 启用（不做删除）**：`users.id` 被 `requirements/bugs.reporter_id` 与 `projects.owner_id`
+  真外键引用且 `PRAGMA foreign_keys=ON`，硬删必 `IntegrityError`；删干净就得销毁审计轨迹，与本平台
+  「人 / Agent 混合协作可追溯」的核心价值直接冲突。**停用是唯一正确的产品答案**：不能登录（403）、
+  既有 token 下一次请求即失效（`jwt.token_in_blocklist_loader` → 401 → 前端自动登出）、不接收通知、
+  不出现在指派选择器里；已有工单**一律不动**，只是在头像旁灰显「已停用」，由 pm 自己决定是否改派。
+- **工单可撤销**：`DELETE /api/{requirements|bugs}/:id` 早就实现（含评论 / 通知 / 审计的级联清理），
+  但**整个前端没有任何一处调用过 `api.del`**。现在工单抽屉底部有「危险区」删除入口（仅 pm/admin 可见，
+  确认框写明将连带删除多少条评论）。同时 `PATCH /:id/assign` 支持 `assignee_type: null` **显式取消指派**
+  ——此前 `AssigneePicker` 渲染的「未指派」选项是个点了必然无效的死控件。
+- **项目改名 / 归档 / 删除**：新增 `PATCH /api/projects/:id`（pm/admin）与 `DELETE /api/projects/:id`（admin）。
+  **归档优于删除**：`GET /api/projects` 默认只返回未归档（`?include_archived=1` 全返），归档项目不再出现在
+  全局切换器与建单表单里，**它已有的工单完全不受影响**；删除则前置检查引用，仍有工单时返 **409** 并带上
+  「还有 12 个需求、3 个 BUG」的可操作计数——绝不依赖外键异常兜底（那会变成一句「internal server error」）。
+- **Agent 删除 + 悬挂 assignee 的诚实降级**：新增 `DELETE /api/agents/:id`，名下仍有**未终态**工单时 409
+  （判据复用 `workflow.is_terminal`，不内联第二份状态清单）。删除后，指向它的工单 `assignee` 返回
+  `{"name":"(已删除)","deleted":true}` 占位而非 `null`——返回 `null` 会让 UI 把一张明明还挂着
+  `assignee_id` 的单显示成「未指派」。
+- **看板分页**：`GET /api/board/*` 此前没有任何上限（300 张单就返 300 张卡 / 82 KB）。现在每列最多
+  `?column_limit=`（默认 100，钳制 `[1,500]`）张卡，并给出该列**真实总数**；被截断时列头诚实写出
+  「显示 100 / 共 342」+「查看全部」出口（跳列表页并预置 `?status=`）。未截断时不渲染任何额外元素。
+- **统一破坏性确认原语**：新增 `components/ui/ConfirmDialog.tsx`——确认按钮 pending 期间禁用（杜绝双击
+  重复 DELETE）、`onConfirm` 抛错时**不关闭对话框**而是就地显示错误（409 的计数正是要被读到的地方）、
+  删项目需键入项目 `key` 解锁。四个破坏性动作共用它，不各页手搓。
+
+### 接口语义变更一览（成功路径 shape 只增不改）
+
+| 端点 | 变更 |
+|---|---|
+| `PATCH /api/projects/:id` | **新增**（admin/pm）：`name`/`key`/`description`/`owner_id`/`archived` |
+| `DELETE /api/projects/:id` | **新增**（admin）：204；仍有工单 → 409（detail 带计数） |
+| `DELETE /api/agents/:id` | **新增**（admin/pm）：204；仍有未终态工单 → 409（detail 带计数） |
+| `PATCH /api/users/:id` | 接受 `is_active`；降级 / 停用最后一位有效管理员 → **409**；无任何可更新字段 → **400**（此前 200） |
+| `PATCH /api/{requirements\|bugs}/:id/assign` | `assignee_type: null` = 显式取消指派（此前 400）；`""` 等坏输入仍 400 |
+| `POST /api/auth/login` | 已停用账号 → **403**（不计入限流） |
+| 全部 `@jwt_required()` 端点 | 已停用 / 已不存在用户的 token → **401** `account is disabled or removed` |
+| `GET /api/projects` | **默认只返回未归档**；`?include_archived=1` 全返；每项 additive 增加 `archived` / `archived_at` |
+| `GET /api/board/*` | 每列上限 `?column_limit=`（默认 100，钳制 `[1,500]`）；每列 additive 增加 `total` / `truncated` |
+| `GET /api/{requirements\|bugs}/:id/activities` | 接 `?limit/offset` + `X-Total-Count`（默认上限 200，响应体仍是裸数组） |
+| 全部返回工单的端点 | `assignee` 指向已删除目标时返回占位对象（含 `deleted: true`）而非 `null` |
+| `GET /api/users` 各响应 | additive 增加 `is_active`（`to_dict` 与 `summary` 均有） |
+
+### `schema_sync` 的能力边界与升级判据
+
+`backend/services/schema_sync.py` **只做 ADD COLUMN**。改类型 / 改约束 / 删列 / 改表名 / 数据回填
+一律不在其内——它们需要真正的迁移工具与人工审阅，擅自扩展本模块会制造「看起来有迁移、其实静默错数据」
+的更坏局面。
+
+- **加列的正确姿势**：在 `models/` 里加列的同时，**必须**在 `ADDITIVE_COLUMNS` 里登记一条
+  `(表名, 列名, DDL)`，否则存量库全线 500。
+- **何时必须换成 Alembic**：出现第一个「改类型 / 改约束 / 需要数据回填」的需求时。
+- **失败即启动失败**（刻意）：任一 `ALTER` 抛错则异常向上传播、应用起不来——模型与库不一致地跑起来，
+  比起不来危险得多。手工回退命令：
+  `sqlite3 backend/aragon.db "ALTER TABLE users ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1;"`。
+
+### 质量门禁
+
+```powershell
+cd backend
+pytest -q            # 零失败且用例总数不减（新增迁移器 / 治理不变量 / 生命周期 / 看板分页用例）
+```
+```
+cd frontend
+npm run typecheck    # tsc --noEmit → 0 error
+npm run build        # next build → 16/16 页成功
+```
+
+更多设计细节见 [`docs/plans/lifecycle-and-governance/spec.md`](docs/plans/lifecycle-and-governance/spec.md)。
+
+---
+
+## 数据持久化与示例数据清理（Data Persistence & Seed Slimming）
+
+### 数据存在哪、存不存得住
+
+- **单一库文件**：`DATABASE_URL` 默认由 `backend/config.py` 所在目录解析为**绝对路径**，
+  从仓库根还是 `backend/` 启动都命中同一个 `backend/aragon.db`。启动日志会打印
+  `storage: sqlite file=<绝对路径> exists=… size=…`——「数据去哪了」先看这一行。
+- **WAL + busy_timeout**：文件库连接上自动设 `journal_mode=WAL`、`synchronous=NORMAL`、
+  `busy_timeout=15000`。WAL 让读不阻塞写、崩溃窗口更小；`SQLITE_SYNCHRONOUS=FULL`
+  可回到「每次提交 fsync」的语义。网络盘 / 只读挂载上 WAL 会静默失败——此时**只记
+  warning 并继续启动**，`GET /api/health` 如实报告真实生效值，不粉饰。
+- **健康检查自省**（additive，既有字段字面不变）：
+
+  ```jsonc
+  "storage": { "persistent": true, "journal_mode": "wal",
+               "foreign_keys": true, "synchronous": "NORMAL" }
+  ```
+
+  `persistent: false` 就意味着当前跑在内存库上、重启即失忆。**有意不含路径**——
+  该端点无需鉴权。自省失败只会把这几个字段降级为 `unknown`，**绝不改变 200/503 判据**。
+- **崩溃残留软锁自愈**：`agents.status='busy'` 是一把落库的软锁，进程被 `Ctrl+C` 杀死时
+  `finally` 不执行，锁会永久留在库里、该 Agent 此后每次调用都 409。现在启动时自动解回
+  `idle`。**多 worker 部署必须把 `RELEASE_STALE_LOCKS_ON_STARTUP` 置 `false`**
+  （否则第二个 worker 会误解锁第一个正在跑的 Agent），并改用带心跳的租约锁。
+
+### 示例数据与清理
+
+首启的示例数据是**每类恰好一条**（共 8 行），且每一行都在 `seed_records` 表里登记了出身。
+存量库里的旧演示数据（v1 的 31 行）没有登记，用一次性维护工具清理：
+
+```powershell
+cd backend
+python tools/purge_demo_data.py                 # 默认 dry-run：只报告，不写库
+python tools/purge_demo_data.py --apply         # 备份后真正执行
+python tools/purge_demo_data.py --apply --json  # 机器可读报告
+```
+
+| 退出码 | 含义 |
+|---|---|
+| `0` | 正常结束，且没有任何守卫跳过 |
+| `1` | 参数错误 / 库不存在 / 前置校验失败（未执行任何删除）|
+| `2` | 正常结束，但存在守卫跳过（末任管理员 / Agent 仍有在手工单）|
+
+四重保险：**默认 dry-run**（只有显式 `--apply` 才写库，不可配置）、指纹**精确相等**匹配
+（不用 `LIKE`，避免误伤标题里含「拖拽」的真单）、`--apply` 前自动用 SQLite 在线备份 API
+生成 `aragon.db.bak-<时间戳>`、报告先列出「清理后剩余」供人核对。
+
+**最重要的一条规则**：`comments` / `activities` / `notifications` **永不按计数裁剪**。
+这三张表里绝大多数行是用户真实产生的审计与讨论，且没有出身标记；工具只删「已登记 ∪
+被删工单级联带走 ∪ 指向不存在实体的孤儿」三类。**没有出身证明的行，一律推定为真实数据。**
+
+其他须知：
+
+- 被其他行引用的 seed 用户会被**停用**（`is_active=False`）而不是删除——删干净就等于
+  销毁审计轨迹。报告里会写明「停用（仍被 N 行引用）」。
+- 删除 Agent / 用户会在存活工单上留下悬空 `assignee_id`（多态软引用，无外键，UI 显示
+  「(已删除)」），与既有 `DELETE /api/agents` 行为一致；报告里的
+  `dangling assignments` 一行会在 `--apply` 之前把它告诉你。
+- **想反悔**：`copy aragon.db.bak-<时间戳> aragon.db`。
+- **兜底路径**：如果你确信库里本来就没有真数据，直接删掉 `backend/aragon.db` 再启动即可，
+  新 seed 会重建那 8 行——零风险、一条命令。这个工具服务的是另一类人：库里真假混杂，
+  且真的那部分丢不起。
+
+更多设计细节见
+[`docs/plans/data-persistence-and-seed-slimming/spec.md`](docs/plans/data-persistence-and-seed-slimming/spec.md)。
+
+---
+
+## 全流程文档管理（Ticket Document Management）—— 交付物和状态一起流转
+
+前十轮把**状态**流转得很好，但真实团队跑一张需求单时，流转的从来不只是状态，还有
+**交付物**：需求说明书、技术方案、测试计划、复现录屏、验收报告。此前它们在系统里没有
+任何落点——用户只能硬塞进 `description`（无版本、无格式、无法下载），或贴一个会失效的
+外部网盘链接。本轮把「上传 / 查看 / 编辑 / 绑定」四条能力一次补齐，并**贯穿全流程**。
+
+### 一句话立场
+
+**需求和 BUG 从新建到关闭的每一个环节，都要能上传、查看、编辑、绑定它的文档；
+文档是可复用的一等资源，不是某张单的私有附件；每一次文档动作都进时间线。**
+
+### 三张表，不是一张附件表
+
+| 表 | 职责 |
+|---|---|
+| `documents` | 文档的**逻辑实体**：标题、类型、描述、归属项目、上传者、当前版本指针 |
+| `document_versions` | 每一次落盘就是一个**版本**：原始文件名、MIME、大小、SHA-256、备注 |
+| `document_links` | 文档 ↔ 工单的**多对多绑定**，附 `stage`（绑定当时的工单状态**快照**，永不回写）|
+
+一张 `attachments` 表意味着「同一份 PRD 服务 5 张单」要存 5 行、5 份磁盘副本，改名要改
+5 处——那正是本轮要消灭的问题本身。而「编辑」若不产生新版本行，就只能覆盖原文件，历史
+直接消失，而研发文档的价值有一半在版本对比上。
+
+### 存储：内容寻址 + 去重
+
+文件按 SHA-256 摘要落盘到 `UPLOAD_DIR/<ab>/<cd>/<digest>`，元数据全部进数据库。
+一刀切在这里同时拿下三件事：**去重**（同一份文件传 10 次只占一份磁盘）、
+**防路径穿越**（落盘路径由摘要推导，与用户提供的文件名**结构性无关**，而不是靠某个
+清洗函数守住）、**可校验**（摘要即完整性签名）。**零新增依赖**——不上 boto3、
+不上 python-magic、不上 Alembic。
+
+上传边界五道闸，任一不过即 **400**（绝不 500）：引用前置校验（`project_id` /
+`document_id` 存在性）→ 存在性 → 文件名清洗 → 扩展名白名单 → 魔数嗅探。
+超大请求体由 Flask 的 `MAX_CONTENT_LENGTH` 在**进入路由之前**拦下，返 **413**。
+
+### ⚠️ 多机部署：`UPLOAD_DIR` 必须共享
+
+内容寻址天然幂等，多进程同时写同一摘要靠 `os.replace` 原子收敛，**单机多 worker 无需
+任何额外配置**。但**多机部署必须把 `UPLOAD_DIR` 指向共享存储**（NFS / 对象存储挂载），
+否则一台机上传的文件另一台读不到，用户会随机地拿到 410。切换到对象存储时唯一需要替换的
+模块是 `backend/services/documents/storage.py`——它的六函数窄接口就是为此预留的。
+
+### 阶段文档门禁（默认关闭）
+
+`services/doc_policy.py` 为每个（实体, 状态）声明「这一步通常应该有哪几类文档」，
+前端在抽屉里渲染为**建议性清单**（缺失项本身就是一个上传按钮）。默认**绝不阻断**任何流转。
+
+把 `DOC_STAGE_GATE=true` 打开后，人类推进在材料不齐时会收到 409。四条铁律：
+
+1. **状态机仍是唯一的迁移仲裁者**——门禁插在 `can_transition` 判 True 之后、写入之前，
+   只能否决一次合法迁移，永远无法放行一次非法迁移；`services/workflow.py` 一行未改。
+2. **Agent 路径永久豁免**——`agent-advance` / `autorun` / `tick` / `claim-next` 一律不受
+   门禁约束。Agent 是后台循环，被挡住会表现为「自动流水线莫名其妙不动了」，而没有任何
+   一个人会收到那个 409。改为在时间线上写一条**去重后的**建议性提示。
+3. **只作用于「前进」迁移**。用户按下回退键的原因恰恰是材料不合格；门禁若在回退时也生效，
+   就会出现「因为缺测试报告，所以你不能把这张误标为已完成的单退回去补测试报告」的死结。
+4. 该 409 **不带 `allowed` 键**——前端看板拖拽以它是否存在区分「状态机非法」与「其他冲突」。
+
+### 删除语义：对用户真实数据的推定必须是保留
+
+- **删工单** → 只删它的**绑定关系**，**文档本体绝不删除**。它可能绑在别的单上；即使没有，
+  它也是用户真实上传的数据。抽屉里的删除确认文案会如实说明这一点。
+- **删文档** → 仍有绑定时返 **409** 并给出计数；pm/admin 可 `?force=1` 强删，此时为每张
+  受影响的单写一条 `doc_detached` 审计。
+- **物理 blob 的回收恒在 commit 之后**，且在线路径**只做判定不硬删**：删除最后一个引用后、
+  unlink 之前，另一个请求可能**去重命中**同一摘要（命中时不写盘），此时删下去就会让别人
+  刚上传的文件永久指向空气。故引入 `BLOB_GRACE_SECONDS` 宽限窗口 + 去重命中时 `os.utime`
+  触碰 mtime，把这个窗口从毫秒级不可控变成小时级且可配。
+
+### 孤儿 blob 回收 CLI
+
+```
+python backend/tools/gc_orphan_blobs.py                 # 默认 dry-run，只报告
+python backend/tools/gc_orphan_blobs.py --apply         # 真删
+python backend/tools/gc_orphan_blobs.py --apply --json  # 机器可读报告
+```
+
+回收判据**不是**「磁盘上有、`document_versions` 里无人引用」这一条——`UPLOAD_DIR/.tmp/*.part`
+恰好满足它，而那是**其他进程正在写入**的临时文件。三条判据缺一不可（与在线删除**共用同一个
+`storage.is_reapable`**）：不在 `.tmp/` 下、路径符合 `<2hex>/<2hex>/<64hex>` 的内容寻址形状、
+mtime 早于 `now - BLOB_GRACE_SECONDS`。报告会**分别**列出「本轮实际回收」与「无人引用但仍在
+宽限期内（跳过）」——一个只说自己删了多少、不说自己跳过了多少的清理工具，会让人误以为已经
+清干净了。退出码沿用 `purge_demo_data` 约定（`0` / `1` / `2`）。
+
+### 新增环境变量
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `UPLOAD_DIR` | `<repo>/backend/var/uploads` | blob 根目录。**多机部署必须共享**（见上）；已随 `.gitignore` 排除 |
+| `MAX_UPLOAD_MB` | `20` | 单请求体上限；超限返 413 且响应体是 JSON 契约 |
+| `DOC_ALLOWED_EXTENSIONS` | `md,txt,log,csv,json,yaml,yml,pdf,png,jpg,jpeg,gif,webp,doc,docx,xls,xlsx,ppt,pptx,zip` | 扩展名白名单（逗号分隔）。**有意不含 `html/htm/svg/js`**——它们能在同源下执行脚本，而这是文档预览路径上真正生效的第一道防线，任何放宽都必须重做安全评估 |
+| `DOC_STAGE_GATE` | `false` | 阶段文档门禁总开关。默认关闭，行为与本轮之前逐字节相同 |
+| `BLOB_GRACE_SECONDS` | `3600` | blob 回收宽限窗口，关闭「删除↔去重」竞态 |
+| `DOC_TEXT_PREVIEW_MAX_BYTES` | `1048576`（1 MB）| `/content` 文本预览上限；超出则 `truncated=true` |
+| `DOC_TEXT_EDIT_MAX_BYTES` | `524288`（512 KB）| 在线编辑上限。**启动期断言必须严格小于预览上限**，否则可编辑大小的文件会被截断后保存，截断即成为新版本的全部内容 |
+| `DOC_FANOUT_MAX_LINKS` | `20` | 单次改版最多向多少张单扇出时间线 + 通知；超出只写一条汇总，并在响应体如实回传 `fanout_truncated` |
+
+### 安全取向
+
+- **不引入 Markdown 渲染库**：文本一律以 `<pre>` 保留空白渲染。渲染 Markdown 意味着 HTML
+  输出，意味着必须再配一套消毒库，意味着两个新依赖与一类新漏洞。
+- **前端预览的 `objectURL` 硬规则**：`blob:` URL 的 MIME 完全取自前端 `new Blob(..., {type})`
+  的入参、与任何响应头无关，且 `blob:` 文档运行在**前端源**（JWT 就在这个源的 localStorage
+  里）。因此 Blob 的 `type` 只能来自后端 `mime_type` 且必须先过 `INLINE_SAFE_MIMES` 白名单；
+  PDF 只在 `<iframe sandbox>` 内渲染；文本只进 `<pre>` 的文本节点；**禁止**把 `objectURL`
+  交给 `window.open` 或任何顶层导航。
+- **不做病毒 / 恶意内容扫描**（显式的 Non-Goal）。本轮的取向是「不执行、不渲染、不解压」——
+  文件只被摘要、存盘、原样回吐，服务端从不解析其内容。真正的查杀属于部署侧议题。
+
+### 质量门禁
+
+- 后端：`cd backend` → `python -m pytest -q`。**506 passed**（本轮开工基线 371，新增
+  6 个测试文件共 135 条）。
+- 前端：`npm run typecheck` + `npm run build`，均零错误。
+
+更多设计与评审细节见
+[`docs/plans/ticket-document-management/spec.md`](docs/plans/ticket-document-management/spec.md)。

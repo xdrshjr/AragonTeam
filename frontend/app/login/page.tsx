@@ -9,11 +9,10 @@ import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
 
 // 默认账号（seed），点击可一键填充。
+// 示例数据每类只留一条（data-persistence-and-seed-slimming §2.5），因此这里也只剩
+// admin 一个账号——其余成员请登录后在「团队」页真实创建。
 const DEMO_ACCOUNTS = [
   { username: "admin", password: "admin123", label: "管理员" },
-  { username: "pm", password: "pm123", label: "项目经理" },
-  { username: "alice", password: "alice123", label: "成员" },
-  { username: "bob", password: "bob123", label: "成员" },
 ];
 
 export default function LoginPage() {

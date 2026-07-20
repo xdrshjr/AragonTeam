@@ -6,6 +6,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
 import { PROJECTS_KEY, swrFetcher } from "@/lib/api";
+import { useToast } from "@/lib/toast";
 import type { Project } from "@/lib/types";
 
 /** 具体项目 | 未归属（后端 `?project_id=none`）| 全部项目。 */
@@ -39,6 +40,7 @@ export function ProjectScopeProvider({ children }: { children: React.ReactNode }
   // 初值恒为 null：localStorage 在 SSR 阶段不存在，在 useState 初始化函数里读会造成
   // 首屏 hydration mismatch（§7-R3）。读取一律放进下面的 useEffect。
   const [scope, setScopeState] = useState<ProjectScope>(null);
+  const toast = useToast();
 
   useEffect(() => {
     setScopeState(parseStored(window.localStorage.getItem(STORAGE_KEY)));
@@ -52,12 +54,17 @@ export function ProjectScopeProvider({ children }: { children: React.ReactNode }
     else window.localStorage.setItem(STORAGE_KEY, String(next));
   }, []);
 
-  // 失效自愈：选中的项目已被删 / 换库 / 换环境时静默回落「全部项目」，
+  // 失效自愈：选中的项目已被删 / 归档 / 换库 / 换环境时回落「全部项目」，
   // 否则每一页都会空掉且没有任何线索（§2.4④）。
+  // 【lifecycle-and-governance §2.6】本轮起项目可被归档 / 删除，这条自愈从「兜底」
+  // 变成了**常规路径**，因此必须给一次可见提示——静默回落会让用户以为自己的数据没了。
   useEffect(() => {
     if (!projects || typeof scope !== "number") return;
-    if (!projects.some((p) => p.id === scope)) setScope(null);
-  }, [projects, scope, setScope]);
+    if (!projects.some((p) => p.id === scope)) {
+      setScope(null);
+      toast.info("原项目已归档或删除，已切回「全部项目」");
+    }
+  }, [projects, scope, setScope, toast]);
 
   const value = useMemo<ProjectScopeValue>(() => {
     const scopeParam = scope === null ? "" : String(scope);

@@ -55,21 +55,35 @@ class Requirement(db.Model):
 
 
 def _resolve_assignee(assignee_type, assignee_id):
-    """多态 assignee 概要解析，供 Requirement / Bug 共用。"""
+    """多态 assignee 概要解析，供 Requirement / Bug 共用。
+
+    【lifecycle-and-governance §2.7】目标已被删除时返回**占位**而非 None，与
+    comment._resolve_author 对齐：None 会被前端渲染成「未指派」，而这张单其实**有**
+    assignee_id——UI 会说谎。**只有「从未指派」才返回 None**。
+    """
     if not assignee_type or assignee_id is None:
-        return None
+        return None                      # 真·未指派：语义不变
     # 局部 import 规避模型间循环依赖。
     if assignee_type == "user":
         from .user import User
 
         u = db.session.get(User, assignee_id)
-        return u.summary() if u else None
+        return u.summary() if u else _deleted_summary("user", assignee_id)
     if assignee_type == "agent":
         from .agent import Agent
 
         a = db.session.get(Agent, assignee_id)
-        return a.summary() if a else None
-    return None
+        return a.summary() if a else _deleted_summary("agent", assignee_id)
+    return _deleted_summary(assignee_type, assignee_id)
+
+
+def _deleted_summary(kind, ident) -> dict:
+    """指向已删除目标的多态 assignee 占位（与 comment._resolve_author 同策略）。
+
+    返回占位而非 None 是**有意的契约变更**（spec §4.2 已登记）：只在本轮新引入的
+    「Agent 已被删除」状态下才可能出现，存量数据零命中。
+    """
+    return {"type": kind, "id": ident, "name": "(已删除)", "deleted": True}
 
 
 def _iso(dt):

@@ -125,6 +125,8 @@ export default function KanbanBoard({ board, entity, onMove, onConvert, onOpen }
             columnKey={col.key}
             title={col.title}
             items={col.items}
+            total={col.total}
+            truncated={col.truncated}
             entity={entity}
             // 【§2.8①】与后端 /move 的 can_manage_ticket 同判据：无权的卡不给抓手、不可拖。
             canDragCard={(card) => canManageTicket(user, card)}

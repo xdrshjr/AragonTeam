@@ -9,12 +9,19 @@ import type { Board, Card } from "@/lib/types";
 
 type Entity = "requirements" | "bugs";
 
+/** 每列最多拉多少张卡（= 后端 board_page.DEFAULT_COLUMN_LIMIT）。
+ *  超出部分由列头「显示 x / 共 y」+「查看全部」出口承接（§2.8）。 */
+export const BOARD_COLUMN_LIMIT = 100;
+
 // 看板数据拉取 + 乐观移动 + 回滚（§2.2 B / U3 / U4）。
 // 第二参为项目作用域（scale-and-project-scope §2.4⑦）：null=全部、"none"=未归属、number=该项目。
 // **必须**用 `== null` 判据而非真值判据——旧写法无法表达 "none"，且会把 id 0 当作「不过滤」。
 export function useBoard(entity: Entity, scope?: ProjectScope) {
   const toast = useToast();
-  const key = `/board/${entity}${scope == null ? "" : `?project_id=${scope}`}`;
+  // 【lifecycle-and-governance §2.8】显式带上 column_limit：看板每列有上限（后端默认 100），
+  // 写进 key 而非依赖后端默认值，是为了让「一个 key 一种形状」这条不变量在改上限时仍成立。
+  const scopeParam = scope == null ? "" : `project_id=${scope}&`;
+  const key = `/board/${entity}?${scopeParam}column_limit=${BOARD_COLUMN_LIMIT}`;
   const { data, error, isLoading, mutate } = useSWR<Board<Card>>(key, swrFetcher);
 
   // 把某卡移动到 toStatus 列的 toIndex 位置（乐观更新，失败回滚 + toast）。
@@ -50,16 +57,25 @@ export function useBoard(entity: Entity, scope?: ProjectScope) {
       const expectedUpdatedAt = card.updated_at;
 
       // 乐观：先从所在列移除该卡，再插入目标列 toIndex（缺省列尾）。
+      // 【lifecycle-and-governance §2.8】`total` 也必须跟着乐观调整：列头徽章现在渲染的是
+      // 该列**真实总数**而非 items.length（截断列的 items 只是前 100 张），沿用旧 total
+      // 会让拖拽后的两列计数在重取落地前一直是错的——又一次「会说谎的 UI」。
       const optimistic: Board<Card> = {
         columns: data.columns.map((col) => {
           const items = col.items.filter((c) => c.id !== cardId);
+          const isSource = items.length !== col.items.length;
           if (col.key === toStatus) {
             // 覆盖 status 后整体断言为 Card（联合类型无法逐字段收窄）。
             const moved = { ...card!, status: toStatus } as Card;
             const idx = toIndex == null ? items.length : Math.min(toIndex, items.length);
-            return { ...col, items: [...items.slice(0, idx), moved, ...items.slice(idx)] };
+            return {
+              ...col,
+              items: [...items.slice(0, idx), moved, ...items.slice(idx)],
+              // 同列重排时 isSource 为真，一进一出净变化为 0。
+              total: col.total + (isSource ? 0 : 1),
+            };
           }
-          return { ...col, items };
+          return { ...col, items, total: col.total - (isSource ? 1 : 0) };
         }),
       };
 

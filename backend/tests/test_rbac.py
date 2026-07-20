@@ -145,3 +145,25 @@ def test_pm_full_access(client, auth, make_requirement, data):
     mv = client.patch(f"/api/requirements/{req['id']}/move",
                       json={"status": "in_development"}, headers=auth("pm"))
     assert mv.status_code == 200
+
+
+# —— lifecycle-and-governance：本轮新增的破坏性端点同样只对 pm/admin 开放 ——
+
+def test_member_cannot_delete_project(client, auth, data):
+    assert client.delete(f"/api/projects/{data['project_id']}",
+                         headers=auth("member")).status_code == 403
+
+
+def test_member_cannot_delete_agent(client, auth, data):
+    assert client.delete(f"/api/agents/{data['dev_agent_id']}",
+                         headers=auth("member")).status_code == 403
+
+
+def test_member_cannot_patch_project(client, auth, data):
+    assert client.patch(f"/api/projects/{data['project_id']}", json={"name": "x"},
+                        headers=auth("member")).status_code == 403
+
+
+def test_member_cannot_deactivate_a_user(client, auth, data):
+    assert client.patch(f"/api/users/{data['member2_id']}", json={"is_active": False},
+                        headers=auth("member")).status_code == 403

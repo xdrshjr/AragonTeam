@@ -27,6 +27,15 @@ export default function AssigneePicker({ label = "指派给", value, onChange }:
       ? `${value.assignee_type}:${value.assignee_id}`
       : "";
 
+  // 【lifecycle-and-governance §2.5】已停用成员不再可被指派；但**当前工单的 assignee
+  // 恰为已停用成员时仍须保留该选项**，否则 <select> 的 value 匹配不到任何 option，
+  // 浏览器会静默显示成第一项——UI 会说成「未指派」，又是一次说谎。
+  const selectableUsers = (users ?? []).filter(
+    (u) =>
+      u.is_active !== false ||
+      (value.assignee_type === "user" && value.assignee_id === u.id)
+  );
+
   function handle(raw: string) {
     if (!raw) {
       onChange({ assignee_type: null, assignee_id: null });
@@ -54,11 +63,12 @@ export default function AssigneePicker({ label = "指派给", value, onChange }:
             ))}
           </optgroup>
         )}
-        {users && users.length > 0 && (
+        {selectableUsers.length > 0 && (
           <optgroup label="团队成员">
-            {users.map((u) => (
+            {selectableUsers.map((u) => (
               <option key={`user:${u.id}`} value={`user:${u.id}`}>
                 {u.display_name || u.username}
+                {u.is_active === false ? "（已停用）" : ""}
               </option>
             ))}
           </optgroup>

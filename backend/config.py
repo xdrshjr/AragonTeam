@@ -51,6 +51,47 @@ class Config:
     # —— 启动时是否 seed（测试关闭并自建 fixture，§2.5-5）——
     SEED_ON_STARTUP = _env_bool("SEED_ON_STARTUP", True)
 
+    # —— 启动时是否解开崩溃残留的 Agent busy 软锁（data-persistence §2.4）——
+    # 真开关：应用内一律读 `app.config["RELEASE_STALE_LOCKS_ON_STARTUP"]`。
+    # 多 worker 部署下必须置 false（升级判据见 services/persistence.py 模块 docstring）。
+    RELEASE_STALE_LOCKS_ON_STARTUP = _env_bool("RELEASE_STALE_LOCKS_ON_STARTUP", True)
+
+    # —— 文档管理（ticket-document-management §5.3）——
+    # blob 根目录。多机部署必须共享该目录（NFS / 对象存储），否则一台机上传的
+    # 文件另一台读不到（spec §8 R-11）。随 .gitignore 排除，不入库。
+    UPLOAD_DIR = os.environ.get("UPLOAD_DIR", os.path.join(_basedir, "var", "uploads"))
+    MAX_UPLOAD_MB = _env_int("MAX_UPLOAD_MB", 20)
+    # Flask 原生闸：在**进入路由之前**拦截超大请求体，超大文件不会被读进进程。
+    # 派生值——子类覆盖 MAX_UPLOAD_MB 时必须同步覆盖本项（类体求值一次，不会跟着变）。
+    MAX_CONTENT_LENGTH = _env_int("MAX_UPLOAD_MB", 20) * 1024 * 1024
+    # 扩展名白名单。**有意不含 html/htm/svg/js**：它们能在同源下执行脚本，
+    # 而 inline 预览路径上这是唯一真正生效的一道防线（spec §8 R-2）。
+    DOC_ALLOWED_EXTENSIONS = tuple(
+        e.strip().lower()
+        for e in os.environ.get(
+            "DOC_ALLOWED_EXTENSIONS",
+            "md,txt,log,csv,json,yaml,yml,pdf,png,jpg,jpeg,gif,webp,"
+            "doc,docx,xls,xlsx,ppt,pptx,zip",
+        ).split(",")
+        if e.strip()
+    )
+    # 阶段文档门禁。默认关闭：默认强制会让存量数据全线卡死，且 Agent 流水线会静默死锁。
+    DOC_STAGE_GATE = _env_bool("DOC_STAGE_GATE", False)
+    # blob 回收宽限窗口（秒）。与去重命中时的 os.utime 配对，关闭「删除↔去重」竞态。
+    BLOB_GRACE_SECONDS = _env_int("BLOB_GRACE_SECONDS", 3600)
+    # 文本预览 / 在线编辑上限。**前者必须严格大于后者**（doc_policy 启动期断言）：
+    # 否则可编辑大小的文件会被截断后保存，截断即成为新版本的全部内容。
+    DOC_TEXT_PREVIEW_MAX_BYTES = _env_int("DOC_TEXT_PREVIEW_MAX_BYTES", 1048576)
+    DOC_TEXT_EDIT_MAX_BYTES = _env_int("DOC_TEXT_EDIT_MAX_BYTES", 524288)
+    # 单次改版最多向多少张单扇出 Activity + 通知；超出只写一条汇总（SQLite 单写者）。
+    DOC_FANOUT_MAX_LINKS = _env_int("DOC_FANOUT_MAX_LINKS", 20)
+
+    # —— SQLite 落盘同步级别（data-persistence §2.3，评审 P1-3）——
+    # 【文档性镜像，不是 PRAGMA 的读取源】PRAGMA 由 extensions.py 的全局 connect
+    # 监听器设置，那里没有 Flask 上下文，只能读 os.environ。本字段只服务
+    # README 表格与人工排查；**改这里不会让 PRAGMA 有任何变化**，要改请设环境变量。
+    SQLITE_SYNCHRONOUS = os.environ.get("SQLITE_SYNCHRONOUS", "NORMAL")
+
 
 class TestConfig(Config):
     """pytest 专用（§2.5-5 / R-02）。内存库 + 固定连接池 + 关 seed + 快过期 + 低限流阈。"""
@@ -68,3 +109,9 @@ class TestConfig(Config):
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(minutes=30)
     # 阈值调小以便快测 429（【R-03】计数随 app 实例重建，见 services/ratelimit.py）。
     LOGIN_MAX_ATTEMPTS = 3
+    # 【ticket-document-management §5.3】上限调到 1 MB，让 413 用例只需造 1 MB 数据。
+    # MAX_CONTENT_LENGTH 是**派生值**，父类在类体里求值一次，必须在这里一并覆盖。
+    MAX_UPLOAD_MB = 1
+    MAX_CONTENT_LENGTH = 1 * 1024 * 1024
+    # **UPLOAD_DIR 有意不在这里写死**：TestConfig 是类级常量，全套用例共享一份，
+    # 写死就等于所有用例共用一个目录。由 conftest 的 app fixture 逐用例注入 tmp_path。

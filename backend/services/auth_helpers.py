@@ -72,6 +72,20 @@ def can_manage_ticket(user, ticket) -> bool:
     return False
 
 
+def can_manage_document(user, document) -> bool:
+    """文档级 RBAC 裁决（ticket-document-management §2.7）。
+
+    True 当且仅当：user 为 admin/pm，或 user 是该文档的**上传者本人**。
+    与 `can_manage_ticket` 并列，供编辑元数据 / 新增版本 / 删除三个写操作内联调用。
+    读（列表 / 详情 / 下载 / 正文）对所有已认证用户开放，见 §2.7 的理由。
+    """
+    if user is None or document is None:
+        return False
+    if user.role in ("admin", "pm"):
+        return True
+    return getattr(document, "uploader_id", None) == user.id
+
+
 def forbidden(detail=None):
     """统一 403 响应体（与 require_role 形状一致：{error:"forbidden", detail}）。"""
     return jsonify({"error": "forbidden", "detail": detail or {}}), 403

@@ -18,6 +18,11 @@ class User(db.Model):
     display_name = db.Column(db.String(128), nullable=True)
     # seed 时分配的头像底色（hex），前端渲染人类首字母头像用。
     avatar_color = db.Column(db.String(9), nullable=True)
+    # 【lifecycle-and-governance §2.5】停用而非删除：users.id 被 requirements/bugs.reporter_id
+    # 与 projects.owner_id 真外键引用，硬删会 IntegrityError；且删除等于销毁审计轨迹。
+    # 停用保留全部历史，只切断「能登录」与「能被指派」两种**面向未来**的能力。
+    # 新增列必须同时登记进 services/schema_sync.py::ADDITIVE_COLUMNS，否则存量库必炸。
+    is_active = db.Column(db.Boolean, nullable=False, default=True, server_default="1")
 
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=utcnow, onupdate=utcnow)
@@ -38,6 +43,8 @@ class User(db.Model):
             "role": self.role,
             "display_name": self.display_name or self.username,
             "avatar_color": self.avatar_color,
+            # 【§2.5】additive：前端据此渲染「已停用」标记并从指派下拉里过滤。
+            "is_active": bool(self.is_active),
             "created_at": _iso(self.created_at),
             "updated_at": _iso(self.updated_at),
         }
@@ -49,6 +56,9 @@ class User(db.Model):
             "id": self.id,
             "name": self.display_name or self.username,
             "avatar_color": self.avatar_color,
+            # 【§2.5】additive：一张单的 assignee 被停用后，抽屉与列表要显示灰色
+            # 「已停用」而不是若无其事——否则 pm 不知道这张单其实已经没人管。
+            "is_active": bool(self.is_active),
         }
 
 

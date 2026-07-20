@@ -15,6 +15,11 @@ NOTIFICATION_TYPES = (
     "status_changed",  # 人类推进 / 流转
     "agent_advanced",  # Agent 自主推进
     "converted",       # 需求转 BUG
+    # 【ticket-document-management §2.5】文档被上传 / 绑定 / 改版。因 NotificationPreference
+    # 采用「无行 = 开启」，存量用户**零回填**即自动收到该类通知。
+    # 下游 services/notification_prefs.py 与 routes/me.py 都**从本元组派生**，无需改动；
+    # 唯一需要手改的是前端镜像 components/settings/NotificationPrefsCard.tsx。
+    "document_added",
 )
 
 

@@ -7,7 +7,10 @@ import Toggle from "@/components/ui/Toggle";
 import ErrorState from "@/components/ui/ErrorState";
 import type { NotificationType } from "@/lib/types";
 
-// 6 类通知的展示顺序（与 NOTIFICATION_TYPES 一致）。
+// 各类通知的展示顺序（与后端 models/notification.py::NOTIFICATION_TYPES 一致）。
+// 【ticket-document-management §2.5 / 评审 R21】本列表是那个常量在前端的**手写镜像**：
+// 后端的 notification_prefs.py 与 routes/me.py 都是从常量派生的、无需改动，唯独这里
+// 不加就不会出现在设置页的开关列表里——新类型会变成一个用户永远关不掉的通知。
 const TYPES: NotificationType[] = [
   "assigned",
   "commented",
@@ -15,6 +18,7 @@ const TYPES: NotificationType[] = [
   "status_changed",
   "agent_advanced",
   "converted",
+  "document_added",
 ];
 
 // 通知偏好卡（account-settings §7）：逐类开关，拨动即乐观更新，失败自动回滚 + toast。

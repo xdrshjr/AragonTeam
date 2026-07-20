@@ -355,3 +355,37 @@ def test_register_empty_role_defaults_member(client, auth):
                     headers=auth("admin"))
     assert r.status_code == 201
     assert r.get_json()["user"]["role"] == "member"
+
+
+# —— lifecycle-and-governance：本轮新增字段的边界 ——
+
+def test_patch_project_archived_must_be_boolean(client, auth, data):
+    r = client.patch(f"/api/projects/{data['project_id']}", json={"archived": "yes"},
+                     headers=auth("pm"))
+    assert r.status_code == 400
+    assert r.get_json()["detail"]["field"] == "archived"
+
+
+def test_patch_project_archived_null_is_400(client, auth, data):
+    """显式 null 不得静默取 default False（那会悄悄把一个归档项目取消归档）。"""
+    r = client.patch(f"/api/projects/{data['project_id']}", json={"archived": None},
+                     headers=auth("pm"))
+    assert r.status_code == 400
+
+
+def test_patch_project_owner_must_exist(client, auth, data):
+    r = client.patch(f"/api/projects/{data['project_id']}", json={"owner_id": 99999},
+                     headers=auth("pm"))
+    assert r.status_code == 400
+    assert r.get_json()["error"] == "owner not found"
+
+
+def test_board_column_limit_out_of_range_is_clamped_not_500(client, auth):
+    r = client.get("/api/board/requirements?column_limit=99999999999999999999",
+                   headers=auth("pm"))
+    assert r.status_code == 200
+
+
+def test_board_project_id_still_400_on_garbage(client, auth):
+    r = client.get("/api/board/requirements?project_id=abc", headers=auth("pm"))
+    assert r.status_code == 400

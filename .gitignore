@@ -5,6 +5,12 @@ __pycache__/
 venv/
 *.db
 backend/aragon.db
+# WAL 附属文件与 purge 工具的备份不入库（`*.db` 不覆盖这三种后缀）。
+*.db-wal
+*.db-shm
+*.db.bak-*
+# 文档 blob 根目录（ticket-document-management §5.3）：用户上传的文件不入库。
+backend/var/
 
 # —— Node / 前端 ——
 node_modules/

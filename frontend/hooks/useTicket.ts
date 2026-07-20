@@ -60,13 +60,25 @@ export function useTicket(entity: Entity, id: number | null) {
 
   const assign = useCallback(
     async (value: AssigneeValue) => {
-      if (!id || !value.assignee_type || value.assignee_id == null) return;
-      await api.patch(`/${entity}/${id}/assign`, value);
+      if (!id) return;
+      // 【lifecycle-and-governance §2.4-B2】「未指派」不再被静默吞掉：后端已支持
+      // `assignee_type: null` 显式取消指派，原样发出即可。此前这里直接 return，
+      // 让 AssigneePicker 那个渲染出来的「未指派」选项成了点了必然无效的死控件。
+      await api.patch(`/${entity}/${id}/assign`, {
+        assignee_type: value.assignee_type ?? null,
+        assignee_id: value.assignee_type ? value.assignee_id : null,
+      });
       mutateTicket();
       mutateFeed();
     },
     [entity, id, mutateTicket, mutateFeed]
   );
+
+  /** 删除本工单（pm/admin）。成功后由调用方关闭抽屉并失效外层列表 / 看板（§2.4-B1）。 */
+  const remove = useCallback(async () => {
+    if (!id) return;
+    await api.del(`/${entity}/${id}`);
+  }, [entity, id]);
 
   const patch = useCallback(
     async (body: Record<string, unknown>) => {
@@ -105,5 +117,6 @@ export function useTicket(entity: Entity, id: number | null) {
     assign,
     patch,
     convertToBug,
+    remove,
   };
 }

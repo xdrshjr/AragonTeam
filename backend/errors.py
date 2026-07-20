@@ -8,10 +8,11 @@
 """
 import logging
 
-from flask import jsonify
-from werkzeug.exceptions import HTTPException
+from flask import current_app, jsonify
+from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 
 from extensions import db
+from services.documents.storage import BlobMissing, StorageUnavailable
 from services.scope import QueryParamError
 from services.validation import ValidationError
 
@@ -41,6 +42,31 @@ def register_error_handlers(app, jwt):
             "error": f"invalid {e.field}",
             "detail": {"field": e.field, "expected": e.expected, "got": str(e.got)},
         }), 400
+
+    # —— 上传超限（ticket-document-management §2.3）——
+    # 【注册顺序无关，Flask 优先匹配更具体的处理器】上面的 HTTPException catch-all 今天
+    # 就会把 413 渲染成 {"error": "Request Entity Too Large"}——那串文案对用户毫无意义，
+    # 也不告诉他上限是多少。这里换成稳定的领域文案 + 可操作的 detail。
+    @app.errorhandler(RequestEntityTooLarge)
+    def handle_too_large(e: RequestEntityTooLarge):
+        max_mb = current_app.config.get("MAX_UPLOAD_MB")
+        return jsonify({"error": "file too large", "detail": {"max_mb": max_mb}}), 413
+
+    # —— 存储不可用（§2.2 / 评审 R14）：503 而非 500 ——
+    # 只读挂载 / 权限不足是**运维问题，不是代码缺陷**，用户与告警系统都应该看到区别。
+    @app.errorhandler(StorageUnavailable)
+    def handle_storage_unavailable(e: StorageUnavailable):
+        log.error("document storage is unavailable: %s", e)
+        return jsonify({"error": "document storage is unavailable"}), 503
+
+    # —— blob 与 DB 不一致（§8 R-9）：记录在、文件丢 → 410 Gone，不 500 ——
+    # 语义准确且可被前端友好提示；/download 与 /content 在此**必须一致**。
+    @app.errorhandler(BlobMissing)
+    def handle_blob_missing(e: BlobMissing):
+        return jsonify({
+            "error": "document content is gone",
+            "detail": {"hint": "the stored file is missing; re-upload a new version"},
+        }), 410
 
     # —— 兜底 500：记录日志但不泄露堆栈 ——
     @app.errorhandler(Exception)
@@ -72,9 +98,31 @@ def register_error_handlers(app, jwt):
     def _expired_token(jwt_header, jwt_payload):
         return jsonify({"error": "token expired"}), 401
 
+    @jwt.token_in_blocklist_loader
+    def _is_revoked(jwt_header, jwt_payload):
+        """已停用 / 已不存在的用户，其既有 token 立即失效
+        （lifecycle-and-governance §2.5）。
+
+        选这个钩子而不是 before_request：它由 jwt_required() 内部调用，天然只作用于
+        受保护端点，不会误伤 /api/health 与 /api/auth/login；也不必在每个路由上
+        各加一次守卫（漏一个就是一个后门）。
+        """
+        from models.user import User
+
+        sub = jwt_payload.get("sub")
+        try:
+            uid = int(sub)
+        except (TypeError, ValueError):
+            return True
+        user = db.session.get(User, uid)
+        return user is None or not user.is_active
+
     @jwt.revoked_token_loader
     def _revoked_token(jwt_header, jwt_payload):
-        return jsonify({"error": "token revoked"}), 401
+        # 【§2.5】文案对用户有意义：本项目唯一的吊销来源就是「账号被停用 / 被删」。
+        # 仍是 401——前端 lib/api.ts 的 signalUnauthorizedIfNeeded 据 401 清 token
+        # 并广播 aragon:unauthorized，被停用者下一次任何请求即被自动登出。
+        return jsonify({"error": "account is disabled or removed"}), 401
 
     @jwt.needs_fresh_token_loader
     def _needs_fresh(jwt_header, jwt_payload):

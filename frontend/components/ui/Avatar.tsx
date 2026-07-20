@@ -64,14 +64,26 @@ export function AssigneeAvatar({
       </span>
     );
   }
+  // 【lifecycle-and-governance §2.5/2.7】指向已删除目标 / 已停用成员时灰显 + 说明，
+  // 让「这张单其实已经没人管了」看得见——而不是若无其事地画一个正常头像。
+  const inactive = assignee.deleted === true || assignee.is_active === false;
+  const suffix = assignee.deleted
+    ? "（已删除）"
+    : assignee.is_active === false
+      ? "（已停用）"
+      : assignee.type === "agent"
+        ? "（Agent）"
+        : "";
   return (
-    <Avatar
-      name={assignee.name}
-      color={assignee.avatar_color}
-      isAgent={assignee.type === "agent"}
-      size={size}
-      title={`${assignee.name}${assignee.type === "agent" ? "（Agent）" : ""}`}
-    />
+    <span className={inactive ? "inline-flex opacity-50 grayscale" : "inline-flex"}>
+      <Avatar
+        name={assignee.name}
+        color={assignee.avatar_color}
+        isAgent={assignee.type === "agent"}
+        size={size}
+        title={`${assignee.name}${suffix}`}
+      />
+    </span>
   );
 }
 

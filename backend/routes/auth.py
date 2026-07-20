@@ -33,6 +33,12 @@ def login():
         ratelimit.record_failure(key)
         return jsonify({"error": "invalid username or password"}), 401
 
+    # 【lifecycle-and-governance §2.5】账号已停用 → 403，与「密码错误」明确区分：
+    # 这是管理动作，用户需要知道去找谁。**不计入限流失败**（不是猜密码），也不多泄露信息。
+    # 选 403 而非 401 纯粹是语义更准：401 会触发前端自动登出流程，而此时用户本就未登录。
+    if not user.is_active:
+        return jsonify({"error": "account is disabled, contact an administrator"}), 403
+
     ratelimit.clear(key)  # 成功清零，避免误伤后续正常登录。
     # 【R-01】identity 必须是字符串（str(user.id)），否则受保护接口会 422。
     token = create_access_token(

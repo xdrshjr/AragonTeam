@@ -108,10 +108,25 @@ def want_int(data: dict, key: str, *, required: bool = False, default: Optional[
     return v
 
 
-def want_bool(data: dict, key: str, *, default: bool = False) -> bool:
-    """从 data 取一个布尔字段；类型错误抛 ValidationError（→ 400）。"""
+def want_bool(data: dict, key: str, *, required: bool = False,
+              default: bool = False) -> bool:
+    """从 data 取一个布尔字段；类型错误抛 ValidationError（→ 400）。
+
+    Args:
+        data: 已经过 json_body() 归一的 dict。
+        key: 字段名。
+        required: 缺失 / 显式 null 是否视为错误（additive，默认 False，既有调用点行为不变）。
+        default: 缺失时的返回值（required=False 时生效）。
+
+    Raises:
+        ValidationError: 类型错误；或 required=True 时缺失 / 为 null。
+    """
     v = data.get(key, None)
     if v is None:
+        if required:
+            # 【lifecycle-and-governance §2.5】显式传 null 时必须 400 而非静默取 default：
+            # `{"is_active": null}` 若回落成 False，会**把一个用户悄悄停用**。
+            raise ValidationError(f"{key} is required", field=key, expected="boolean")
         return default
     if not isinstance(v, bool):
         raise ValidationError(f"{key} must be a boolean", field=key, expected="boolean")
