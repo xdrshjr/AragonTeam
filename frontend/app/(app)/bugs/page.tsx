@@ -22,6 +22,9 @@ import BugForm from "@/components/bugs/BugForm";
 import AssigneePicker, { AssigneeValue } from "@/components/AssigneePicker";
 import TicketDrawer from "@/components/TicketDrawer";
 import FilterBar from "@/components/FilterBar";
+import Checkbox from "@/components/ui/Checkbox";
+import BulkToolbar from "@/components/bulk/BulkToolbar";
+import { useBulkSelection } from "@/hooks/useBulkSelection";
 
 // 与后端 pagination.DEFAULT_LIMIT 对齐，便于对照排查。
 const PAGE_SIZE = 50;
@@ -47,11 +50,15 @@ export default function BugsPage() {
 
   // Header 全局搜索：跨页导航时携带 ?q=（进入页面 mount 读取）；已在本页时靠事件即时刷新（B6，与需求页对称）。
   useEffect(() => {
-    const q = new URLSearchParams(window.location.search).get("q") || "";
+    const search = new URLSearchParams(window.location.search);
+    const q = search.get("q") || "";
     if (q) {
       setKeyword(q);
       setDebounced(q);
     }
+    // 【lifecycle-and-governance §2.8】承接看板被截断列的「查看全部」出口（?status=<key>）。
+    const s = search.get("status") || "";
+    if (s && BUG_COLUMNS.some((c) => c.key === s)) setStatus(s);
     function onSearch(e: Event) {
       const term = (e as CustomEvent<string>).detail?.trim();
       if (!term) return;
@@ -97,6 +104,9 @@ export default function BugsPage() {
   useEffect(() => {
     if (data && offset > 0 && offset >= data.total) setOffset(0);
   }, [data, offset]);
+
+  // 【bulk-operations §3.3】页内作用域的批量选择（与需求页同构）。
+  const selection = useBulkSelection(bugs, `${filterSignature}|${offset}`);
 
   const [creating, setCreating] = useState(false);
   const [openId, setOpenId] = useState<number | null>(null);
@@ -151,7 +161,8 @@ export default function BugsPage() {
           </div>
         }
       />
-      <main className="flex-1 overflow-y-auto p-6">
+      {/* 【bulk-operations §3.4】选中时给正文留出动作栏的让位空间（与需求页同构）。 */}
+      <main className={`flex-1 overflow-y-auto p-6${selection.count > 0 ? " pb-28" : ""}`}>
         <FilterBar
           keyword={keyword}
           onKeyword={setKeyword}
@@ -186,6 +197,14 @@ export default function BugsPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border text-left text-ink-muted">
+                  <th scope="col" className="w-10 px-4 py-3">
+                    <Checkbox
+                      aria-label={selection.allSelected ? "取消全选本页" : "全选本页"}
+                      checked={selection.allSelected}
+                      indeterminate={selection.someSelected}
+                      onToggleSelected={selection.toggleAll}
+                    />
+                  </th>
                   <th className="px-4 py-3 font-medium">编号</th>
                   <th className="px-4 py-3 font-medium">标题</th>
                   <th className="px-4 py-3 font-medium">状态</th>
@@ -200,8 +219,21 @@ export default function BugsPage() {
                   <tr
                     key={b.id}
                     onClick={() => setOpenId(b.id)}
-                    className="cursor-pointer border-b border-border last:border-0 hover:bg-black/[0.015]"
+                    data-selected={selection.isSelected(b.id)}
+                    className={[
+                      "cursor-pointer border-b border-border last:border-0",
+                      selection.isSelected(b.id)
+                        ? "bg-clay-soft/25 hover:bg-clay-soft/35"
+                        : "hover:bg-black/[0.015]",
+                    ].join(" ")}
                   >
+                    <td className="px-4 py-3">
+                      <Checkbox
+                        aria-label={`选择 BUG-${b.id}`}
+                        checked={selection.isSelected(b.id)}
+                        onToggleSelected={(extend) => selection.toggle(b.id, extend)}
+                      />
+                    </td>
                     <td className="px-4 py-3 text-ink-muted">BUG-{b.id}</td>
                     <td className="px-4 py-3 font-medium text-ink">{b.title}</td>
                     <td className="px-4 py-3">
@@ -254,6 +286,15 @@ export default function BugsPage() {
           )}
         </div>
       </main>
+
+      {/* 【bulk-operations §3.4】选中态浮动动作栏 + 全部批量弹窗 */}
+      <BulkToolbar
+        entity="bugs"
+        selection={selection}
+        pageTotal={bugs?.length ?? 0}
+        canManage={canAssign}
+        onDone={() => mutate()}
+      />
 
       <TicketDrawer
         entity="bugs"

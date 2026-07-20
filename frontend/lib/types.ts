@@ -28,6 +28,10 @@ export interface AssigneeSummary {
   name: string;
   avatar_color?: string | null; // user
   kind?: AgentKind;             // agent
+  /** 人类成员是否仍在职（false = 已停用；lifecycle-and-governance §2.5）。 */
+  is_active?: boolean;
+  /** 指向已删除目标的占位（§2.7）——**不是** null，否则 UI 会把它显示成「未指派」。 */
+  deleted?: boolean;
 }
 
 export interface User {
@@ -37,6 +41,8 @@ export interface User {
   role: Role;
   display_name: string;
   avatar_color: string | null;
+  /** false = 已停用：不能登录、既有 token 立即失效、不出现在指派选择器（§2.5）。 */
+  is_active: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -57,6 +63,9 @@ export interface Project {
   key: string;
   description: string | null;
   owner_id: number | null;
+  /** true = 已归档：不出现在项目列表默认结果与全局切换器；既有工单不受影响（§2.6）。 */
+  archived: boolean;
+  archived_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -73,6 +82,9 @@ export interface Requirement {
   assignee: AssigneeSummary | null;
   reporter_id: number | null;
   position: number;
+  /** 绑定的文档数（ticket-document-management §4.3，additive）。看板 / 列表据此渲染
+   *  回形针徽章。旧响应缺省时为 undefined，渲染方须按 0 处理。 */
+  document_count?: number;
   created_at: string;
   updated_at: string;
 }
@@ -90,6 +102,9 @@ export interface Bug {
   reporter_id: number | null;
   related_requirement_id: number | null;
   position: number;
+  /** 绑定的文档数（ticket-document-management §4.3，additive）。看板 / 列表据此渲染
+   *  回形针徽章。旧响应缺省时为 undefined，渲染方须按 0 处理。 */
+  document_count?: number;
   created_at: string;
   updated_at: string;
 }
@@ -163,6 +178,10 @@ export interface BoardColumn<T> {
   key: string;
   title: string;
   items: T[];
+  /** 该列的**真实**总数（可能大于 items.length；§2.8）。 */
+  total: number;
+  /** items 是否被每列上限截断——为真时列头必须诚实写出「显示 x / 共 y」。 */
+  truncated: boolean;
 }
 export interface Board<T> {
   columns: BoardColumn<T>[];
@@ -194,7 +213,8 @@ export type NotificationType =
   | "mentioned"
   | "status_changed"
   | "agent_advanced"
-  | "converted";
+  | "converted"
+  | "document_added";
 
 export interface Notification {
   id: number;
@@ -300,6 +320,8 @@ export interface UserUpdate {
   email?: string;
   role?: Role;
   password?: string;
+  /** 停用 / 启用成员（§2.5）；停用最后一位有效管理员 → 409。 */
+  is_active?: boolean;
 }
 
 // POST /api/agents（新建）与 PATCH /api/agents/:id（编辑）共用；键均可选，按模式取子集。
@@ -315,4 +337,180 @@ export interface ProjectCreate {
   name: string;
   key: string;
   description?: string;
+}
+
+// —— bulk-operations：需求 / BUG 批量操作 ——
+// 与后端 services/bulk_ops.py 的契约逐字对齐；该模块的 docstring 是唯一真相。
+
+/** 批量动作。`priority` 只对需求合法、`severity` 只对 BUG 合法，错配即 400。 */
+export type BulkAction =
+  | "move"
+  | "assign"
+  | "unassign"
+  | "priority"
+  | "severity"
+  | "delete";
+
+/** POST /api/{requirements|bugs}/bulk 请求体；动作参数按 action 取子集。 */
+export interface BulkRequest {
+  ids: number[];
+  action: BulkAction;
+  /** action=move：目标状态。 */
+  status?: string;
+  /** action=assign：指派目标。 */
+  assignee_type?: AssigneeType;
+  assignee_id?: number;
+  /** action=priority|severity：目标级别。 */
+  value?: string;
+}
+
+/** 逐项失败。`error` 与单条端点的错误串一致，`detail` 形状随 error 而变。 */
+export interface BulkFailure {
+  id: number;
+  error: string;
+  detail?: {
+    from?: string;
+    to?: string;
+    allowed?: string[];
+    reason?: string;
+  };
+}
+
+/** 逐项跳过（请求的目标状态本就成立，不算失败，也不写审计）。 */
+export interface BulkSkip {
+  id: number;
+  reason: string;
+}
+
+/** 批量响应恒 200；成败逐项在三桶里，**顶层永不出现 allowed**（看板拖拽据此分流错误）。 */
+export interface BulkResult {
+  entity: "requirement" | "bug";
+  action: BulkAction;
+  requested: number;
+  succeeded: number[];
+  skipped: BulkSkip[];
+  failed: BulkFailure[];
+  counts: {
+    requested: number;
+    succeeded: number;
+    skipped: number;
+    failed: number;
+  };
+}
+
+// PATCH /api/projects/:id（pm/admin）——改名 / 改 key / 改 owner / 归档；仅提供的键才更新。
+export interface ProjectUpdate {
+  name?: string;
+  key?: string;
+  description?: string;
+  owner_id?: number | null;
+  archived?: boolean;
+}
+
+// —— ticket-document-management：文档 ——
+//
+// 【评审 R12】uploader / created_by 一律用现网既有的 `AuthorSummary`（与「时间线作者」
+// 同语义，已含区分 人/Agent/系统 的 `type` 字段）。**不要新造 `Principal`** —— 那个
+// 标识符在本仓库里不存在，照抄会让 `npm run typecheck` 立即失败。
+
+export type DocumentKind =
+  | "requirement_spec"
+  | "design"
+  | "test_plan"
+  | "test_report"
+  | "bug_evidence"
+  | "release_note"
+  | "reference"
+  | "other";
+
+export interface DocumentVersion {
+  id: number;
+  document_id: number;
+  version_no: number;
+  original_filename: string;
+  mime_type: string;
+  size_bytes: number;
+  sha256: string;
+  note: string | null;
+  uploader: AuthorSummary | null;
+  created_at: string;
+}
+
+export interface DocumentSummary {
+  id: number;
+  title: string;
+  kind: DocumentKind;
+  description: string | null;
+  project_id: number | null;
+  uploader: AuthorSummary | null;
+  current_version: DocumentVersion | null;
+  link_count: number;
+  /** 结构上可否在线编辑（文本扩展名 + 未超编辑阈值）。截断与非 UTF-8 两条判据
+   *  需要读文件，由 `GET /documents/:id/content` 的 `editable` 给出最终答案。 */
+  editable: boolean;
+  /** 仅上传响应携带：后端命中了去重，本次没有真的写盘。 */
+  deduped?: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DocumentLink {
+  id: number;
+  document_id: number;
+  entity_type: "requirement" | "bug";
+  entity_id: number;
+  label: string | null;
+  /** 绑定当时的工单状态**快照**，工单后续流转不会回写它。 */
+  stage: string | null;
+  created_by: AuthorSummary | null;
+  created_at: string;
+}
+
+export interface TicketDocument extends DocumentSummary {
+  link: DocumentLink;
+}
+
+export interface DocumentDetail extends DocumentSummary {
+  versions: DocumentVersion[];
+  links: DocumentLink[];
+}
+
+export interface DocumentContent {
+  content: string;
+  document_id: number;
+  version_id: number;
+  version_no: number;
+  mime_type: string;
+  truncated: boolean;
+  encoding_confident: boolean;
+  /** 四条判据的**最终**答案：文本类型 + 未超阈值 + 未截断 + 严格 UTF-8。 */
+  editable: boolean;
+}
+
+export interface StageChecklistItem {
+  kind: DocumentKind;
+  label: string;
+  satisfied: boolean;
+  document_ids: number[];
+}
+
+export interface StageChecklist {
+  entity: "requirement" | "bug";
+  entity_id: number;
+  stage: string;
+  stage_label: string;
+  /** 后端 `DOC_STAGE_GATE` 的真实值。**前端绝不自己猜这个开关。** */
+  enforced: boolean;
+  satisfied: boolean;
+  items: StageChecklistItem[];
+}
+
+export interface DocumentRevisionResult {
+  document: DocumentSummary;
+  version: DocumentVersion;
+  deduped: boolean;
+  fanout_written: number;
+  /** 绑定单数超过后端扇出上限时为真——如实告知，不假装全发了。 */
+  fanout_truncated: boolean;
+  link_count: number;
 }

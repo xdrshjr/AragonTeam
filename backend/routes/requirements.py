@@ -22,14 +22,15 @@ from models.project import Project
 from models.user import User
 from models.agent import Agent
 from models.activity import Activity
-from models.comment import Comment
-from models.notification import Notification
-from services import workflow, agent_runner, notifications
+from services import (
+    workflow, agent_runner, bulk_ops, doc_policy, lifecycle, notifications, positions,
+)
+from services.documents import counts as document_counts
 from services.auth_helpers import (
     require_role, current_user, can_manage_ticket, forbidden,
 )
 from services import agent_autopilot
-from services.pagination import paginate, with_total_count
+from services.pagination import MAX_LIMIT, paginate, with_total_count
 from services.scope import (
     MAX_DB_INT, MIN_DB_INT, apply_project_filter, project_scope, want_query_int,
 )
@@ -42,19 +43,12 @@ bp = Blueprint("requirements", __name__, url_prefix="/api/requirements")
 # ————————————————————— 公共辅助 —————————————————————
 
 def _next_position(model, status: str, project_id) -> int:
-    """返回「同项目同状态」列的下一个 position（该列现有最大值 + 1；空列为 0）。
+    """列内下一个 position。唯一实现在 `services/positions.py`（bulk-operations §2.2）。
 
-    position 的语义是**看板某一列内的相对次序**，而看板已按项目过滤（board.py），
-    因此编号必须与看板可见集合同域，否则跨项目卡片会污染插入索引（§2.5）。
-
-    Args:
-        model: Requirement / Bug 模型类。
-        status: 目标状态列。
-        project_id: 工单所属项目 id，未归属传 None。**必填**（评审 R3：给默认值会让
-            漏传的调用点静默把单编进「未归属」号段，错得无声无息）。
+    此处保留同名薄转发：`routes/bugs.py` 与既有测试都按这个名字 import 它，改名等于
+    无谓的破坏性变更。真正的语义与 Args 说明见 `positions.next_position`。
     """
-    rows = model.query.filter_by(status=status, project_id=project_id).all()
-    return max((r.position for r in rows), default=-1) + 1
+    return positions.next_position(model, status, project_id)
 
 
 def _coerce_index(value):
@@ -190,8 +184,22 @@ def list_requirements():
     # 用它排跨状态的扁平列表会交错各列、语义混乱。响应 shape 不变，仅默认顺序更合理。
     q = q.order_by(Requirement.updated_at.desc(), Requirement.id.desc())
     rows, total = paginate(q)
-    resp = jsonify([r.to_dict() for r in rows])
+    # 【ticket-document-management §4.3】additive 富化 document_count：
+    # 在**序列化站点**批量计数，不改 to_dict（否则 50 行就是 50 次子查询）。
+    resp = jsonify(document_counts.with_document_counts("requirement", rows))
     return with_total_count(resp, total), 200
+
+
+@bp.post("/bulk")
+@jwt_required()  # 粗粒度角色门禁按 action 分流，在 bulk_ops.run 内裁决。
+def bulk_requirements():
+    """批量操作入口（bulk-operations §2.3）：指派 / 取消指派 / 流转 / 改优先级 / 删除。
+
+    路径放在 `/<int:req_id>` 之前不会与之冲突（int 转换器不吃 "bulk"），列在这里只是
+    为了让读者一眼看到「批量」与「单条」是同一层的两个入口。契约与部分成功语义见
+    `services/bulk_ops.py` 模块 docstring。
+    """
+    return bulk_ops.run("requirement", json_body(), current_user(), _actor())
 
 
 @bp.post("")
@@ -235,7 +243,7 @@ def get_requirement(req_id):
     req = db.session.get(Requirement, req_id)
     if req is None:
         return jsonify({"error": "requirement not found"}), 404
-    return jsonify(req.to_dict()), 200
+    return jsonify(document_counts.with_document_count("requirement", req)), 200
 
 
 @bp.patch("/<int:req_id>")
@@ -278,17 +286,10 @@ def delete_requirement(req_id):
     req = db.session.get(Requirement, req_id)
     if req is None:
         return jsonify({"error": "requirement not found"}), 404
-    # 删除前先把其转出 BUG 的 related_requirement_id 置空，避免悬挂外键（§5 删除策略）。
-    Bug.query.filter_by(related_requirement_id=req_id).update(
-        {"related_requirement_id": None})
-    # §5：删单一并删其评论，避免悬挂多态记录。
-    Comment.query.filter_by(entity_type="requirement", entity_id=req_id).delete()
-    # 【Phase-3 §5】删单一并删其通知，避免点击直达到已删单。
-    Notification.query.filter_by(entity_type="requirement", entity_id=req_id).delete()
-    # 【§2.7】删单一并删审计：SQLite 复用主键，残留审计会被下一张同 id 的单继承，
-    # 造成时间线串档 + 已删单标题泄露。审计的价值绑定在「单还在」这一前提上。
+    # 【data-persistence §2.7】级联清理（related 置空 / 评论 / 通知 / 审计）唯一真相在
+    # services/lifecycle.py；本处只负责删本体并提交。行为逐字不变。
     # 有意**不再**写 "deleted" 审计——该单已不存在，其审计无查看入口，且会被同批清掉。
-    Activity.query.filter_by(entity_type="requirement", entity_id=req_id).delete()
+    lifecycle.delete_ticket_cascade("requirement", req)
     db.session.delete(req)
     db.session.commit()
     return "", 204
@@ -307,6 +308,14 @@ def assign_requirement(req_id):
     data = json_body()
     assignee_type = data.get("assignee_type")
     assignee_id = data.get("assignee_id")
+
+    # 【lifecycle-and-governance §2.4-B2】显式取消指派：assignee_type 为 JSON null 即
+    # 「置为未指派」。判据必须是 `is None` + 键存在，不能用 falsy——空串 "" 是**非法类型**，
+    # 仍应 400，二者语义不同（前者是用户明确的「清空」，后者是坏输入）。
+    if assignee_type is None and "assignee_type" in data:
+        lifecycle.unassign_ticket(req, "requirement", _actor())
+        db.session.commit()
+        return jsonify(req.to_dict()), 200
 
     ok, err = _validate_assignee(assignee_type, assignee_id)
     if not ok:
@@ -372,6 +381,14 @@ def move_requirement(req_id):
             "detail": {"from": frm, "to": to},
             "allowed": workflow.next_states("requirement", frm),
         }), 409
+
+    # 【ticket-document-management §2.4】阶段文档门禁。位置**严格**在 can_transition
+    # 判 True 之后、写入之前：它只能否决一次合法迁移，永远无法放行一次非法迁移
+    # ——状态机仍是唯一的迁移仲裁者。默认关闭（DOC_STAGE_GATE=false），且只作用于
+    # 人类主动推进与「前进」迁移。
+    gated = doc_policy.gate_transition("requirement", req, to)
+    if gated:
+        return gated
 
     req.status = to
     # Phase-2 §2.6：带 position 精确插入并重编号目标列；否则落列尾（向后兼容）。
@@ -584,6 +601,11 @@ def requirement_activities(req_id):
     req = db.session.get(Requirement, req_id)
     if req is None:
         return jsonify({"error": "requirement not found"}), 404
-    acts = Activity.query.filter_by(entity_type="requirement", entity_id=req_id)\
-        .order_by(Activity.created_at.desc(), Activity.id.desc()).all()
-    return jsonify([a.to_dict() for a in acts]), 200
+    # 【P2-1】接分页 + X-Total-Count（响应体仍是裸数组，契约不变）。默认上限取
+    # MAX_LIMIT 而非 50：本端点前端无调用点，但它是公开 REST 契约的一部分，
+    # 把「加分页」造成的截断降到最低（§7 R-5）。
+    q = Activity.query.filter_by(entity_type="requirement", entity_id=req_id)\
+        .order_by(Activity.created_at.desc(), Activity.id.desc())
+    acts, total = paginate(q, default_limit=MAX_LIMIT)
+    resp = jsonify([a.to_dict() for a in acts])
+    return with_total_count(resp, total), 200

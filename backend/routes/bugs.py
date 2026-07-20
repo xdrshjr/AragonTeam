@@ -14,13 +14,12 @@ from models.requirement import Requirement
 from models.user import User
 from models.agent import Agent
 from models.activity import Activity
-from models.comment import Comment
-from models.notification import Notification
-from services import workflow, notifications
+from services import workflow, bulk_ops, doc_policy, lifecycle, notifications
+from services.documents import counts as document_counts
 from services.auth_helpers import (
     require_role, current_user, can_manage_ticket, forbidden,
 )
-from services.pagination import paginate, with_total_count
+from services.pagination import MAX_LIMIT, paginate, with_total_count
 from services.scope import apply_project_filter, project_scope, want_query_int
 from services.search import escape_like
 from services.validation import json_body, want_str, want_int
@@ -64,8 +63,21 @@ def list_bugs():
     # 【§2.3】扁平列表按「最近更新」全局排序（与需求侧、/me/work 一致）；position 仅服务看板列内排序。
     q = q.order_by(Bug.updated_at.desc(), Bug.id.desc())
     rows, total = paginate(q)
-    resp = jsonify([b.to_dict() for b in rows])
+    # 【ticket-document-management §4.3】additive 富化 document_count（批量计数，
+    # 在序列化站点完成，不改 to_dict）。
+    resp = jsonify(document_counts.with_document_counts("bug", rows))
     return with_total_count(resp, total), 200
+
+
+@bp.post("/bulk")
+@jwt_required()  # 粗粒度角色门禁按 action 分流，在 bulk_ops.run 内裁决。
+def bulk_bugs():
+    """批量操作入口（bulk-operations §2.3）：指派 / 取消指派 / 流转 / 改严重度 / 删除。
+
+    与需求侧共用 `services/bulk_ops.py` 的同一条流水线；两侧的差别只有「级别字段」
+    （需求 priority / BUG severity），由 bulk_ops 的 `_SPECS` 一处声明。
+    """
+    return bulk_ops.run("bug", json_body(), current_user(), _actor())
 
 
 @bp.post("")
@@ -113,7 +125,7 @@ def get_bug(bug_id):
     bug = db.session.get(Bug, bug_id)
     if bug is None:
         return jsonify({"error": "bug not found"}), 404
-    return jsonify(bug.to_dict()), 200
+    return jsonify(document_counts.with_document_count("bug", bug)), 200
 
 
 @bp.patch("/<int:bug_id>")
@@ -160,6 +172,12 @@ def assign_bug(bug_id):
     data = json_body()
     assignee_type = data.get("assignee_type")
     assignee_id = data.get("assignee_id")
+
+    # 【lifecycle-and-governance §2.4-B2】显式取消指派（与需求侧同构，共用 lifecycle 服务）。
+    if assignee_type is None and "assignee_type" in data:
+        lifecycle.unassign_ticket(bug, "bug", _actor())
+        db.session.commit()
+        return jsonify(bug.to_dict()), 200
 
     ok, err = _validate_assignee(assignee_type, assignee_id)
     if not ok:
@@ -223,6 +241,13 @@ def move_bug(bug_id):
             "allowed": workflow.next_states("bug", frm),
         }), 409
 
+    # 【ticket-document-management §2.4】阶段文档门禁。**必须在这里单独挂一次**——
+    # move_bug 的主体与 move_requirement 是各自独立的（bugs.py 只跨蓝图复用
+    # check_concurrency 等助手）。位置同样严格在 can_transition 判 True 之后、写入之前。
+    gated = doc_policy.gate_transition("bug", bug, to)
+    if gated:
+        return gated
+
     bug.status = to
     if index is not None:
         _reindex_column(Bug, to, bug.project_id,
@@ -250,13 +275,10 @@ def delete_bug(bug_id):
     bug = db.session.get(Bug, bug_id)
     if bug is None:
         return jsonify({"error": "bug not found"}), 404
-    # §5：删单一并删其评论。
-    Comment.query.filter_by(entity_type="bug", entity_id=bug_id).delete()
-    # 【Phase-3 §5】删单一并删其通知。
-    Notification.query.filter_by(entity_type="bug", entity_id=bug_id).delete()
-    # 【§2.7】删单一并删审计：SQLite 复用主键，残留审计会被下一张同 id 的单继承，
-    # 造成时间线串档 + 已删单标题泄露。有意**不再**写 "deleted" 审计（无查看入口且会被同批清掉）。
-    Activity.query.filter_by(entity_type="bug", entity_id=bug_id).delete()
+    # 【data-persistence §2.7】级联清理（评论 / 通知 / 审计）唯一真相在
+    # services/lifecycle.py；本处只负责删本体并提交。行为逐字不变。
+    # 有意**不再**写 "deleted" 审计（无查看入口且会被同批清掉）。
+    lifecycle.delete_ticket_cascade("bug", bug)
     db.session.delete(bug)
     db.session.commit()
     return "", 204
@@ -269,6 +291,9 @@ def bug_activities(bug_id):
     bug = db.session.get(Bug, bug_id)
     if bug is None:
         return jsonify({"error": "bug not found"}), 404
-    acts = Activity.query.filter_by(entity_type="bug", entity_id=bug_id)\
-        .order_by(Activity.created_at.desc(), Activity.id.desc()).all()
-    return jsonify([a.to_dict() for a in acts]), 200
+    # 【P2-1】接分页 + X-Total-Count（响应体仍是裸数组，契约不变），与需求侧同构。
+    q = Activity.query.filter_by(entity_type="bug", entity_id=bug_id)\
+        .order_by(Activity.created_at.desc(), Activity.id.desc())
+    acts, total = paginate(q, default_limit=MAX_LIMIT)
+    resp = jsonify([a.to_dict() for a in acts])
+    return with_total_count(resp, total), 200

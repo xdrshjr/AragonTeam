@@ -19,7 +19,7 @@
 from extensions import db
 from models.comment import Comment
 from models.activity import Activity
-from services import workflow, agent_executor
+from services import workflow, agent_executor, doc_policy, positions
 
 # run=all 连续推进的硬上限，防死循环（§7 风险表）。
 MAX_AGENT_STEPS = 6
@@ -66,19 +66,13 @@ def plan(entity: str, kind: str, status: str):
 
 
 def _next_position(model, status: str, project_id) -> int:
-    """返回「同项目同状态」列的下一个 position（该列现有最大值 + 1；空列为 0）。
+    """列内下一个 position。唯一实现在 `services/positions.py`（bulk-operations §2.2）。
 
-    与 routes.requirements._next_position 同语义；此处内联以避免 service→routes 依赖。
-    **两处必须同步修改**，否则 Agent 推进产生的 position 与路由产生的不同域，看板次序会错乱。
-
-    Args:
-        model: Requirement / Bug 模型类。
-        status: 目标状态列。
-        project_id: 工单所属项目 id，未归属传 None。**必填**（scale-and-project-scope 评审 R3：
-            给默认值会让漏传的调用点静默把单编进「未归属」号段，错得无声无息）。
+    此前这里内联着一份与 `routes.requirements._next_position` 逐字相同的实现，并注明
+    「两处必须同步修改」——批量流转是第三个调用点，与其抄第三遍，不如把它提到叶子模块。
+    保留同名薄转发只为不惊动既有调用点与测试。
     """
-    rows = model.query.filter_by(status=status, project_id=project_id).all()
-    return max((r.position for r in rows), default=-1) + 1
+    return positions.next_position(model, status, project_id)
 
 
 def advance_one(entity: str, ticket, agent):
@@ -106,6 +100,14 @@ def advance_one(entity: str, ticket, agent):
     # LLM 未启用 / 失败 / 空返回一律降级回 message（模板），恒返回非空正文（见 agent_executor）。
     body = agent_executor.generate_work(
         entity, ticket, agent, to, fallback_message=message)
+
+    # 【ticket-document-management §2.4 铁律 2】Agent 路径**永不被文档门禁挡住**——
+    # 它是后台循环，被挡住会表现为「自动流水线莫名其妙不动了」，而没有任何一个人会
+    # 收到那个 409。改为把材料缺口留在时间线上给人看。本调用是该提示的**唯一落点**
+    # （现网唯一一处为 Agent 改写 ticket.status 的代码），且自带「仅门禁开启时写」
+    # 与「同一 (工单, 目标状态) 只写一次」两条限定——tick / autorun-all 是循环调用，
+    # 不去重就会每一轮写一条，几分钟内淹没时间线。
+    doc_policy.agent_missing_hint(entity, ticket, to)
 
     # 产出完成后再改状态、建评论——写事务窗口收敛到 commit 前的亚毫秒区间。
     ticket.status = to

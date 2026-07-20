@@ -22,6 +22,9 @@ import RequirementForm from "@/components/requirements/RequirementForm";
 import AssigneePicker, { AssigneeValue } from "@/components/AssigneePicker";
 import TicketDrawer from "@/components/TicketDrawer";
 import FilterBar from "@/components/FilterBar";
+import Checkbox from "@/components/ui/Checkbox";
+import BulkToolbar from "@/components/bulk/BulkToolbar";
+import { useBulkSelection } from "@/hooks/useBulkSelection";
 
 // 与后端 pagination.DEFAULT_LIMIT 对齐，便于对照排查。
 const PAGE_SIZE = 50;
@@ -47,11 +50,16 @@ export default function RequirementsPage() {
 
   // Header 全局搜索：跨页导航时携带 ?q=（进入页面 mount 读取）；已在本页时靠事件即时刷新。
   useEffect(() => {
-    const q = new URLSearchParams(window.location.search).get("q") || "";
+    const search = new URLSearchParams(window.location.search);
+    const q = search.get("q") || "";
     if (q) {
       setKeyword(q);
       setDebounced(q);
     }
+    // 【lifecycle-and-governance §2.8】承接看板被截断列的「查看全部」出口（?status=<key>）。
+    // 只接受合法列 key，避免把任意查询串灌进过滤条（后端也会忽略，但 UI 不该显示一个假筛选）。
+    const s = search.get("status") || "";
+    if (s && REQUIREMENT_COLUMNS.some((c) => c.key === s)) setStatus(s);
     function onSearch(e: Event) {
       const term = (e as CustomEvent<string>).detail?.trim();
       if (!term) return;
@@ -97,6 +105,10 @@ export default function RequirementsPage() {
   useEffect(() => {
     if (data && offset > 0 && offset >= data.total) setOffset(0);
   }, [data, offset]);
+
+  // 【bulk-operations §3.3】批量选择是**页内作用域**：筛选或页码一变即清空，
+  // 动作栏上的数字与屏幕上的行永远对得上。
+  const selection = useBulkSelection(reqs, `${filterSignature}|${offset}`);
 
   const [creating, setCreating] = useState(false);
   const [openId, setOpenId] = useState<number | null>(null);
@@ -151,7 +163,9 @@ export default function RequirementsPage() {
           </div>
         }
       />
-      <main className="flex-1 overflow-y-auto p-6">
+      {/* 【bulk-operations §3.4】动作栏浮在视口底部；选中时给正文留出让位空间，
+          否则它会盖住表格最后一行与分页控件。 */}
+      <main className={`flex-1 overflow-y-auto p-6${selection.count > 0 ? " pb-28" : ""}`}>
         <FilterBar
           keyword={keyword}
           onKeyword={setKeyword}
@@ -186,6 +200,14 @@ export default function RequirementsPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border text-left text-ink-muted">
+                  <th scope="col" className="w-10 px-4 py-3">
+                    <Checkbox
+                      aria-label={selection.allSelected ? "取消全选本页" : "全选本页"}
+                      checked={selection.allSelected}
+                      indeterminate={selection.someSelected}
+                      onToggleSelected={selection.toggleAll}
+                    />
+                  </th>
                   <th className="px-4 py-3 font-medium">编号</th>
                   <th className="px-4 py-3 font-medium">标题</th>
                   <th className="px-4 py-3 font-medium">状态</th>
@@ -199,8 +221,21 @@ export default function RequirementsPage() {
                   <tr
                     key={r.id}
                     onClick={() => setOpenId(r.id)}
-                    className="cursor-pointer border-b border-border last:border-0 hover:bg-black/[0.015]"
+                    data-selected={selection.isSelected(r.id)}
+                    className={[
+                      "cursor-pointer border-b border-border last:border-0",
+                      selection.isSelected(r.id)
+                        ? "bg-clay-soft/25 hover:bg-clay-soft/35"
+                        : "hover:bg-black/[0.015]",
+                    ].join(" ")}
                   >
+                    <td className="px-4 py-3">
+                      <Checkbox
+                        aria-label={`选择 REQ-${r.id}`}
+                        checked={selection.isSelected(r.id)}
+                        onToggleSelected={(extend) => selection.toggle(r.id, extend)}
+                      />
+                    </td>
                     <td className="px-4 py-3 text-ink-muted">REQ-{r.id}</td>
                     <td className="px-4 py-3 font-medium text-ink">{r.title}</td>
                     <td className="px-4 py-3">
@@ -250,6 +285,15 @@ export default function RequirementsPage() {
           )}
         </div>
       </main>
+
+      {/* 【bulk-operations §3.4】选中态浮动动作栏 + 全部批量弹窗 */}
+      <BulkToolbar
+        entity="requirements"
+        selection={selection}
+        pageTotal={reqs?.length ?? 0}
+        canManage={canAssign}
+        onDone={() => mutate()}
+      />
 
       {/* 工单详情抽屉 */}
       <TicketDrawer

@@ -40,6 +40,29 @@
   }
 }
 
+/* 批量动作栏入场（bulk-operations §3.4）：轻微上滑 + 淡入，让「选中了东西」这件事
+   有一个可感知的开始。prefers-reduced-motion 下退化为直接显示。 */
+@keyframes bulk-bar-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-bulk-bar-in {
+  animation: bulk-bar-in 160ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-bulk-bar-in {
+    animation: none;
+  }
+}
+
 /* 拖拽时禁止文本选中，避免选区高亮干扰。 */
 .dnd-dragging,
 .dnd-dragging * {
