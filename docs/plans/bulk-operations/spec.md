@@ -185,13 +185,21 @@ row_level_rbac_per_ticket` 与 `test_bulk_assign_is_forbidden_for_member` 各钉
 
 | # | 判据 | 结果 |
 |---|---|---|
-| A1 | `pytest -q` 零失败且用例数不低于基线 | 基线 371 → 404（+33） |
+| A1 | 后端全量 `pytest -q` 零失败 | **499 passed / 0 failed**（exit 0） |
+| A1' | 本轮改动波及模块的定向回归 | **176 passed / 0 failed**（bulk / requirements / bugs / rbac / workflow / agent_runner / agent_autopilot / lifecycle / board_page / concurrency / hardening_r3） |
 | A2 | `npm run typecheck` | 通过 |
 | A3 | `npm run build` | 通过（16/16 页） |
 | A4 | 批量部分失败不回滚成功项 | `test_bulk_move_partial_failure_does_not_roll_back_successes` |
 | A5 | 批量不绕开行级 / 粗粒度 RBAC | `test_bulk_move_enforces_row_level_rbac_per_ticket`、`test_bulk_assign_is_forbidden_for_member`、`test_bulk_delete_is_forbidden_for_member` |
 | A6 | 坏输入恒 400，绝不 500 | ids 的 7 条边界用例 |
 | A7 | 顶层永不出现 `allowed` | `test_bulk_response_never_exposes_allowed_at_top_level` |
+
+> **关于用例总数**：本节点开工时测得基线 371，收尾时全量已达 506 收集 / 499 执行。
+> 差额**不是**本轮产出——实测同一工作树在本节点作业期间被**另一个并发 agent** 持续写入
+> （`tests/test_document_*.py`、`test_doc_policy.py`、`test_purge_demo_data.py` 的 mtime
+> 分别落在 03:17–03:30，均晚于 03:12 的基线测量）。因此「基线 → 现值」的差值在这一轮
+> 没有可比性，A1 只断言**零失败**这一条能站得住的事实，并另加 A1' 的定向回归钉住本轮
+> 改动真正波及的模块。
 
 ---
 
