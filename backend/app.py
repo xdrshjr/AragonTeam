@@ -69,6 +69,9 @@ def create_app(config_class=Config):
             app.logger.warning("cannot create UPLOAD_DIR %s: %s", upload_dir, exc)
     # 阈值关系写错了应当立刻起不来，而不是等着某天有人发现文档被吃掉了半截（§2.6）。
     doc_policy.assert_thresholds(app.config)
+    # 同理：把 md 从白名单里摘掉却留着模板 / Agent 归档，应当起不来而不是在用户点
+    # 「用模板新建」时抛一个语义不明的 500（document-lifecycle-depth §2.3 C-1）。
+    doc_policy.assert_text_document_extension(app.config)
 
     # —— 可观测性：结构化日志 + request-id + 访问日志（§2.5-1）——
     init_observability(app)

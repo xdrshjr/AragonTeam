@@ -10,12 +10,14 @@ import Button from "@/components/ui/Button";
 import ConfirmDialog from "@/components/ui/ConfirmDialog";
 import ErrorState from "@/components/ui/ErrorState";
 import DocumentBindModal from "@/components/documents/DocumentBindModal";
+import DocumentDiffModal from "@/components/documents/DocumentDiffModal";
 import DocumentPreviewModal from "@/components/documents/DocumentPreviewModal";
 import DocumentRow, { type RowAction } from "@/components/documents/DocumentRow";
 import DocumentTextEditorModal from "@/components/documents/DocumentTextEditorModal";
 import DocumentUploadZone from "@/components/documents/DocumentUploadZone";
 import DocumentVersionTimeline from "@/components/documents/DocumentVersionTimeline";
 import StageChecklist from "@/components/documents/StageChecklist";
+import { useDocumentMeta } from "@/hooks/useDocumentTrash";
 import type { DocumentSummary, DocumentVersion, TicketDocument } from "@/lib/types";
 
 type Entity = "requirements" | "bugs";
@@ -43,7 +45,9 @@ export default function DocumentPanel({
   const toast = useToast();
   const {
     documents, checklist, isLoading, error, refresh, upload, bindExisting, unbind,
+    createFromTemplate,
   } = useTicketDocuments(entity, id);
+  const { templates } = useDocumentMeta();
 
   const [presetKind, setPresetKind] = useState<string | undefined>(undefined);
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -54,6 +58,9 @@ export default function DocumentPanel({
   const [editing, setEditing] = useState<DocumentSummary | null>(null);
   const [versionsOf, setVersionsOf] = useState<DocumentSummary | null>(null);
   const [unbinding, setUnbinding] = useState<TicketDocument | null>(null);
+  const [diffing, setDiffing] = useState<
+    { doc: DocumentSummary; versions: [DocumentVersion, DocumentVersion] } | null
+  >(null);
 
   async function onDownload(doc: DocumentSummary) {
     const version = doc.current_version;
@@ -71,6 +78,9 @@ export default function DocumentPanel({
       { key: "preview", label: "预览", onSelect: () => setPreviewing({ doc }) },
       { key: "download", label: "下载", onSelect: () => onDownload(doc) },
       { key: "versions", label: "版本历史", onSelect: () => setVersionsOf(doc) },
+      // 「对比版本」与「版本历史」入口相同：勾选两版是对比的必经一步，做成两个
+      // 并列入口只会让用户点错一次再退回来。
+      { key: "compare", label: "对比版本", onSelect: () => setVersionsOf(doc) },
     ];
     // 「在线编辑」只在文档结构上可编辑、且用户有权改版时出现。后端在 POST /versions
     // 里独立复核同一判据——前端隐藏只是收敛，不是防线。
@@ -89,6 +99,16 @@ export default function DocumentPanel({
   function fillMissing(kind: string) {
     setPresetKind(kind);
     setUploadOpen(true);
+  }
+
+  async function fillFromTemplate(kind: string) {
+    try {
+      await createFromTemplate(kind);
+      onChanged?.();
+      toast.success("已按模板新建并绑定，去补全内容吧");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "模板新建失败");
+    }
   }
 
   return (
@@ -111,7 +131,13 @@ export default function DocumentPanel({
       </div>
 
       <div className="space-y-3">
-        <StageChecklist checklist={checklist} onFill={fillMissing} canUpload={canManage} />
+        <StageChecklist
+          checklist={checklist}
+          onFill={fillMissing}
+          onCreateFromTemplate={fillFromTemplate}
+          templates={templates}
+          canUpload={canManage}
+        />
 
         {error ? (
           <ErrorState message="无法加载本工单的文档" onRetry={() => refresh()} />
@@ -176,11 +202,25 @@ export default function DocumentPanel({
       <DocumentVersionTimeline
         open={versionsOf != null}
         document={versionsOf}
+        canManage={canManageDocument(user, versionsOf)}
         onClose={() => setVersionsOf(null)}
         onPreview={(version) => {
           if (versionsOf) setPreviewing({ doc: versionsOf, version });
           setVersionsOf(null);
         }}
+        onCompare={(versions) => {
+          if (!versionsOf) return;
+          setDiffing({ doc: versionsOf, versions });
+          setVersionsOf(null);
+        }}
+        onRolledBack={() => { refresh(); onChanged?.(); }}
+      />
+
+      <DocumentDiffModal
+        open={diffing != null}
+        document={diffing?.doc ?? null}
+        versions={diffing?.versions ?? null}
+        onClose={() => setDiffing(null)}
       />
 
       <ConfirmDialog

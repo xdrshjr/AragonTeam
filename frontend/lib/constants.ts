@@ -109,6 +109,11 @@ export const ACTION_LABELS: Record<string, string> = {
   doc_detached: "解除文档",
   doc_revised: "文档改版",
   doc_missing_hint: "材料提示",
+  // 【document-lifecycle-depth §3.4 / R-10】上一轮 R10 的原样重演：漏登记这三项
+  // 同样不报错，只会让时间线出现裸英文。
+  doc_rolled_back: "文档回滚",
+  doc_trashed: "移入回收站",
+  doc_restored: "恢复文档",
 };
 
 export function actionLabel(action: string): string {
@@ -255,4 +260,46 @@ export const INLINE_SAFE_MIMES = [
 
 export function isInlineSafeMime(mime?: string | null): boolean {
   return (INLINE_SAFE_MIMES as readonly string[]).includes(mime || "");
+}
+
+/**
+ * 可当作**纯文本正文**读取的扩展名全集，与后端 `services/documents/mime.py:12` 的
+ * `TEXT_EXTENSIONS` **逐字一致**（document-lifecycle-depth §3.4）。
+ *
+ * 【它与上面的 INLINE_SAFE_MIMES 职责完全不同，不可互换】
+ *   - TEXT_EXTENSIONS  = 「这份东西的正文能不能当纯文本读」。正文经 `/content` 这个
+ *     JSON 端点取回，最终落进 `<pre>` 的**文本节点**，全程不产生 `blob:` URL、
+ *     不产生任何由浏览器自主解析的文档，故它**没有任何安全职责**。
+ *   - INLINE_SAFE_MIMES = 「哪些 MIME 允许被浏览器当作文档直接渲染」。它是 `blob:`
+ *     预览与 `Content-Disposition: inline` 的判据，`text/html` 与 `image/svg+xml`
+ *     被刻意排除在外，因为它们能在本站源上执行脚本。
+ *
+ * 把 csv / json / yaml 加进 `INLINE_SAFE_MIMES` 是一个看起来更短、实则把上一轮唯一
+ * 还生效的防线撬松的改法（`text/html` 与它们只隔一行）。**不要那样做**（R-13）。
+ */
+export const TEXT_EXTENSIONS = [
+  "md",
+  "txt",
+  "log",
+  "csv",
+  "json",
+  "yaml",
+  "yml",
+] as const;
+
+/** 取文件名的小写扩展名；无扩展名 / 形状异常返回空串（与后端 `extension_of` 同判据）。 */
+export function extensionOf(filename?: string | null): string {
+  const name = filename || "";
+  if (!name.includes(".")) return "";
+  const ext = name.split(".").pop()!.toLowerCase();
+  return /^[a-z0-9]{1,16}$/.test(ext) ? ext : "";
+}
+
+export function isTextExtension(extension: string): boolean {
+  return (TEXT_EXTENSIONS as readonly string[]).includes(extension);
+}
+
+/** 该扩展名是否走 Markdown 渲染视图（其余文本类型行为逐字节不变，仍是 `<pre>`）。 */
+export function isMarkdownExtension(extension: string): boolean {
+  return extension === "md" || extension === "markdown";
 }

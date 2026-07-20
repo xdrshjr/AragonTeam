@@ -15,8 +15,9 @@
 from sqlalchemy import func
 
 from extensions import db
-from models.document import DocumentVersion
+from models.document import Document, DocumentVersion
 from models.document_link import DocumentLink
+from services.documents import trash
 
 
 def link_counts(entity: str, ids) -> dict:
@@ -32,13 +33,18 @@ def link_counts(entity: str, ids) -> dict:
 
     契约：`ids` 为空时**直接返回 {} 且不发查询**——SQLite 对空 `IN ()` 的行为不必去赌。
     看板一次返回 5~7 列，计数必须在**收集完全部列的 rows 之后**调一次，不是每列一次。
+
+    【过滤点 5 · §2.4】必须 join `documents` 并过滤软删，否则看板与列表的回形针徽章
+    数字虚高：显示 3、点进去只有 2 份。这一行错了不会抛异常，只会让数字安静地说谎。
     """
     id_list = list(ids)
     if not id_list:
         return {}
     rows = (db.session.query(DocumentLink.entity_id, func.count(DocumentLink.id))
+            .join(Document, Document.id == DocumentLink.document_id)
             .filter(DocumentLink.entity_type == entity,
                     DocumentLink.entity_id.in_(id_list))
+            .filter(trash.not_deleted())
             .group_by(DocumentLink.entity_id)
             .all())
     return {entity_id: total for entity_id, total in rows}

@@ -86,6 +86,19 @@ class Config:
     # 单次改版最多向多少张单扇出 Activity + 通知；超出只写一条汇总（SQLite 单写者）。
     DOC_FANOUT_MAX_LINKS = _env_int("DOC_FANOUT_MAX_LINKS", 20)
 
+    # —— 文档全流程纵深（document-lifecycle-depth §5.3）——
+    # Agent 交付物归档总开关；关掉即完全回到上一轮行为。
+    # 【运维注记】它是本轮唯一一个「升级即生效、且会自动产生用户可见数据」的开关。
+    # 默认 True 是对的（否则这根支柱等于没上线），但**首次上线建议先以
+    # DOC_AGENT_ARCHIVE=false 跑一轮**，确认 LLM 产物质量与 ARCHIVE_KIND 的归类
+    # 符合预期后再打开。
+    DOC_AGENT_ARCHIVE = _env_bool("DOC_AGENT_ARCHIVE", True)
+    # 短于此长度的 Agent 产物不值得建成一份「交付物」。
+    DOC_AGENT_ARCHIVE_MIN_CHARS = _env_int("DOC_AGENT_ARCHIVE_MIN_CHARS", 200)
+    # 回收站保留期（天）。**运行时不据此自动删任何东西**——只有 tools/purge_trash.py
+    # 在人按下 --apply 时读它。本项目没有调度器，不可逆操作应当由人按下。
+    DOC_TRASH_RETENTION_DAYS = _env_int("DOC_TRASH_RETENTION_DAYS", 30)
+
     # —— SQLite 落盘同步级别（data-persistence §2.3，评审 P1-3）——
     # 【文档性镜像，不是 PRAGMA 的读取源】PRAGMA 由 extensions.py 的全局 connect
     # 监听器设置，那里没有 Flask 上下文，只能读 os.environ。本字段只服务
@@ -113,5 +126,10 @@ class TestConfig(Config):
     # MAX_CONTENT_LENGTH 是**派生值**，父类在类体里求值一次，必须在这里一并覆盖。
     MAX_UPLOAD_MB = 1
     MAX_CONTENT_LENGTH = 1 * 1024 * 1024
+    # 【document-lifecycle-depth §5.3】测试环境显式关闭 Agent 归档。`from_llm` 判据
+    # （`_llm_active()` 在 TESTING 下恒 False）已经保证它不触发，配置层再钉一道，
+    # 让「归档相关用例」可以通过 monkeypatch 精确开启，而不必担心某天有人放宽了
+    # `_llm_active()` 就静默改变了另外 500 条用例的行为。
+    DOC_AGENT_ARCHIVE = False
     # **UPLOAD_DIR 有意不在这里写死**：TestConfig 是类级常量，全套用例共享一份，
     # 写死就等于所有用例共用一个目录。由 conftest 的 app fixture 逐用例注入 tmp_path。

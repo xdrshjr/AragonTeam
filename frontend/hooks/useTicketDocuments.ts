@@ -92,9 +92,27 @@ export function useTicketDocuments(entity: Entity, id: number | null) {
     [entity, id, isValidId, settle]
   );
 
+  /** 用模板即时生成一份骨架并绑定（document-lifecycle-depth §2.3 C-1）。
+   *
+   * 走的是**同一个** `POST /{entity}/:id/documents` 端点的第三态，不新开路由——
+   * 后端落库路径也与人工上传完全同一条（内容寻址 / 建 v1 / 写 doc_attached）。
+   */
+  const createFromTemplate = useCallback(
+    async (templateKind: string, title?: string) => {
+      if (!isValidId) return null;
+      const result = await api.post(`/${entity}/${id}/documents`,
+                                    { template_kind: templateKind,
+                                      title: title || undefined });
+      settle();
+      return result;
+    },
+    [entity, id, isValidId, settle]
+  );
+
   return {
     documents: documents ?? [],
     checklist,
+    createFromTemplate,
     isLoading,
     error,
     refresh: settle,

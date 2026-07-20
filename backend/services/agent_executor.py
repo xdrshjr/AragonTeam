@@ -10,6 +10,7 @@
 """
 import logging
 import os
+from typing import NamedTuple
 
 from flask import current_app
 
@@ -32,10 +33,24 @@ def _llm_active() -> bool:
     return llm.is_enabled()
 
 
-def generate_work(entity, ticket, agent, to_status, fallback_message: str) -> str:
-    """返回该步骤的评论正文——真实产物或降级模板，恒非空、绝不抛给上层。"""
+class WorkProduct(NamedTuple):
+    """带来源标记的工作产物（document-lifecycle-depth §2.3 C-2）。
+
+    `from_llm` 为真**当且仅当**真实 LLM 返回了被采纳的正文——判据与下方「采纳」的条件
+    逐字相同。所有降级路径（未启用 / 空返回 / 超长 / 异常）一律 False。
+    Agent 归档以它为第一道前置条件：**降级模板绝不归档**，而 `_llm_active()` 在 TESTING
+    下恒 False，因此存量用例的行为逐字节不变。
+    """
+
+    text: str
+    from_llm: bool
+
+
+def generate_work_product(entity, ticket, agent, to_status,
+                          fallback_message: str) -> WorkProduct:
+    """该步骤的正文 + 来源标记——真实产物或降级模板，恒非空、绝不抛给上层。"""
     if not _llm_active():
-        return fallback_message
+        return WorkProduct(fallback_message, False)
     try:
         system, user = agent_prompts.build_context(entity, ticket, agent, to_status)
         result = llm.complete(system, user)
@@ -43,16 +58,26 @@ def generate_work(entity, ticket, agent, to_status, fallback_message: str) -> st
         if not text:
             _LOG.warning("agent_executor: empty LLM output for %s#%s, using template",
                          entity, ticket.id)
-            return fallback_message
+            return WorkProduct(fallback_message, False)
         if len(text) > _MAX_BODY_CHARS:
             _LOG.warning("agent_executor: oversized LLM output (%d chars) for %s#%s, using template",
                          len(text), entity, ticket.id)
-            return fallback_message
-        return text
+            return WorkProduct(fallback_message, False)
+        return WorkProduct(text, True)
     except Exception as exc:  # noqa: BLE001 —— 兜底：任何失败一律降级，绝不冒泡成 5xx（P1-2）
         _LOG.warning("agent_executor: LLM generation failed (%s) for %s#%s, using template",
                      exc, entity, ticket.id)
-        return fallback_message
+        return WorkProduct(fallback_message, False)
+
+
+def generate_work(entity, ticket, agent, to_status, fallback_message: str) -> str:
+    """薄包装，**保持既有签名与语义逐字节不变**（零破坏，§8 R-9）。
+
+    改动 `generate_work` 的签名会牵动 `real-agent-execution` 一轮的全部叙述与潜在测试桩，
+    因此新能力走 `generate_work_product`，本函数只丢掉来源标记。
+    """
+    return generate_work_product(entity, ticket, agent, to_status,
+                                 fallback_message).text
 
 
 def wall_budget_seconds():

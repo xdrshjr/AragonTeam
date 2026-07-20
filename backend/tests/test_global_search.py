@@ -26,7 +26,8 @@ def test_search_returns_both_entities(client, auth, make_requirement, make_bug):
     assert body["query"] == "登录"
     assert [x["title"] for x in body["requirements"]] == ["登录页面"]
     assert [x["title"] for x in body["bugs"]] == ["登录失败"]
-    assert body["counts"] == {"requirements": 1, "bugs": 1}
+    # 【document-lifecycle-depth §4.7】信封新增第三个桶 documents，counts 同步扩为三键。
+    assert body["counts"] == {"requirements": 1, "bugs": 1, "documents": 0}
 
 
 def test_search_matches_description(client, auth):
@@ -42,9 +43,11 @@ def test_search_blank_query_returns_empty(client, auth):
     r = client.get("/api/search", headers=auth("member"))
     assert r.status_code == 200
     body = r.get_json()
+    # 空信封必须与 `search_all` **同形状**：前端直接解构 counts.documents 并 .map
+    # 结果数组，少一个键就是清空搜索框时的一次运行时崩溃（§2.1 A-1）。
     assert body == {
-        "query": "", "requirements": [], "bugs": [],
-        "counts": {"requirements": 0, "bugs": 0},
+        "query": "", "requirements": [], "bugs": [], "documents": [],
+        "counts": {"requirements": 0, "bugs": 0, "documents": 0},
     }
 
 
@@ -102,7 +105,8 @@ def test_search_no_hits_returns_empty_groups(client, auth, make_requirement):
     body = r.get_json()
     assert body["requirements"] == []
     assert body["bugs"] == []
-    assert body["counts"] == {"requirements": 0, "bugs": 0}
+    assert body["documents"] == []
+    assert body["counts"] == {"requirements": 0, "bugs": 0, "documents": 0}
 
 
 def test_search_requires_auth(client):

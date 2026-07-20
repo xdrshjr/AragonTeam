@@ -10,13 +10,16 @@
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
 
-from extensions import db
+from extensions import db, utcnow
 from models.bug import Bug
 from models.document import DOCUMENT_KINDS, Document
 from models.requirement import Requirement
 from services import doc_policy
 from services.auth_helpers import can_manage_ticket, current_user, forbidden
+from services.documents import agent_archive
 from services.documents import service as documents
+from services.documents import templates as document_templates
+from services.documents import trash
 from services.pagination import MAX_LIMIT, paginate, with_total_count
 from services.validation import json_body, want_int, want_str
 from routes.documents import form_int
@@ -81,13 +84,41 @@ def attach_ticket_document(entity_segment, ticket_id):
     return _upload_and_bind(entity, ticket, uploaded)
 
 
+def _reject_reserved_label(label):
+    """`agent:` 前缀为 Agent 归档保留（§5.2 · 评审 V-17）。
+
+    这是对既有端点的一处**契约收紧**，故在 §4.5 的状态码表里显式登记为 400：人工绑定
+    若能写出 `agent:qa`，Agent 归档下一轮就会把它当成「我上次的产物」并往上追加版本。
+    前端同样有一道校验——前端是体验、后端是防线，**两处都要**。
+    """
+    if label and label.startswith(agent_archive.LABEL_PREFIX):
+        return jsonify({
+            "error": "this label prefix is reserved",
+            "detail": {"reason": "reserved_label",
+                       "prefix": agent_archive.LABEL_PREFIX},
+        }), 400
+    return None
+
+
 def _bind_existing(entity, ticket):
-    """JSON 分支：把文档库里已有的一份文档绑到本单。"""
+    """JSON 分支（三态）：绑定已有 / 用模板新建 / 其他即 400（§2.3 C-1）。"""
     data = json_body()
-    document_id = want_int(data, "document_id", required=True)
     label = want_str(data, "label", max_len=64) or None
+    bad_label = _reject_reserved_label(label)
+    if bad_label:
+        return bad_label
+
+    template_kind = want_str(data, "template_kind") or None
+    if template_kind is not None:
+        return _create_from_template(entity, ticket, template_kind, data, label)
+
+    document_id = want_int(data, "document_id", required=True)
     # 【闸 0 · 评审 R3】不存在的 document_id 必须 404，绝不靠外键异常兜底（那是 500）。
-    document = db.session.get(Document, document_id)
+    # 【过滤点 7 · §2.4】必须过滤软删：否则能把一份已删文档重新绑到单上，
+    # 回收站语义直接失效（用户「删掉」的文档又出现在别的单的抽屉里）。
+    document = (Document.query
+                .filter(Document.id == document_id, trash.not_deleted())
+                .first())
     if document is None:
         return jsonify({"error": "document not found"}), 404
     if documents.find_link(document.id, entity, ticket.id) is not None:
@@ -101,6 +132,40 @@ def _bind_existing(entity, ticket):
     return jsonify({"document": document.to_dict(), "link": link.to_dict()}), 201
 
 
+def _create_from_template(entity, ticket, template_kind, data, label):
+    """按模板即时生成一份 Markdown 骨架并绑定到本单（§2.3 C-1）。
+
+    落库路径与人工上传**完全同一条**（同样经内容寻址、同样建 v1、同样写 `doc_attached`），
+    **不新开第二条写入路径**——`create_text_document` 自持四条不变量替代那四道上传闸。
+    """
+    if not document_templates.is_template_kind(template_kind):
+        return jsonify({
+            "error": "unknown template kind",
+            "detail": {"field": "template_kind",
+                       "allowed": list(document_templates.TEMPLATE_KINDS)},
+        }), 400
+    title = want_str(data, "title", max_len=200) or \
+        document_templates.default_title(template_kind, ticket.title)
+    user = current_user()
+    body = document_templates.render(
+        template_kind, entity=entity, ticket=ticket,
+        author_name=getattr(user, "display_name", None) or getattr(user, "username", ""),
+        stage_label=documents.stage_label(entity, ticket.status),
+        today=utcnow().strftime("%Y-%m-%d"),
+    )
+    document, version, blob = documents.create_text_document(
+        title=title, kind=template_kind, content=body,
+        project_id=ticket.project_id, uploader=user,
+        filename_stem=document_templates.filename_stem(template_kind, entity, ticket.id),
+    )
+    link = documents.bind_document(document, entity=entity, ticket=ticket,
+                                   label=label, actor=_actor(), uploaded=True)
+    db.session.commit()
+    payload = document.to_dict(link_count=1, version=version)
+    payload["deduped"] = blob.deduped
+    return jsonify({"document": payload, "link": link.to_dict()}), 201
+
+
 def _upload_and_bind(entity, ticket, uploaded):
     """multipart 分支：一次请求完成「上传到文档库 + 绑定到本单」。"""
     form = request.form
@@ -108,6 +173,9 @@ def _upload_and_bind(entity, ticket, uploaded):
     kind = want_str(form, "kind", default="other", choices=DOCUMENT_KINDS)
     description = want_str(form, "description", strip=False) or None
     label = want_str(form, "label", max_len=64) or None
+    bad_label = _reject_reserved_label(label)
+    if bad_label:
+        return bad_label
     # 文档随工单落到同一个项目（工单未归属时同为 None），无需用户再选一次。
     project_id = form_int(form, "project_id")
     if project_id is None:
@@ -138,6 +206,9 @@ def detach_ticket_document(entity_segment, ticket_id, document_id):
         return err
     if not can_manage_ticket(current_user(), ticket):
         return forbidden({"reason": f"cannot detach documents from this {entity}"})
+    # 【过滤点 8 · §2.4 —— 正确处置是「有意不改」，不是「没看见」】这里**刻意不加**
+    # 软删过滤：解绑是幂等的，过滤与不过滤都返回 204，行为无差别；而让一份被软删的
+    # 文档仍能被手工解绑，反而更符合直觉（用户在别处看到残留绑定时能清掉它）。
     document = db.session.get(Document, document_id)
     if document is None:
         return "", 204                       # 幂等：目标已不存在即视作已解绑

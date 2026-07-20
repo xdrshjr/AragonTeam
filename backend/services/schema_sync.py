@@ -19,6 +19,10 @@ from sqlalchemy import inspect, text
 ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("users", "is_active", "BOOLEAN NOT NULL DEFAULT 1"),
     ("projects", "archived_at", "DATETIME"),
+    # document-lifecycle-depth §5.1：文档软删除两列。默认 NULL，存量行零回填。
+    # `deleted_by_id` 在模型侧同样**不建外键**——两条建表路径必须产出同一个 schema。
+    ("documents", "deleted_at", "DATETIME"),
+    ("documents", "deleted_by_id", "INTEGER"),
 ]
 
 

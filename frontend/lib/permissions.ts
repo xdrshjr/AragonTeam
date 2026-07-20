@@ -33,3 +33,13 @@ export function canManageDocument(
   if (!document) return false;
   return document.uploader?.type === "user" && document.uploader.id === user.id;
 }
+
+/**
+ * 与后端 `?purge=1` 的门禁**同判据**：仅 admin（document-lifecycle-depth §2.6）。
+ *
+ * 彻底删除是全系统唯一不可逆的文档操作，故收口到最高角色。前端镜像只负责别把这个
+ * 按钮显示给注定会被 403 的人；后端仍是权威。
+ */
+export function canPurgeDocument(user: User | null): boolean {
+  return user?.role === "admin";
+}

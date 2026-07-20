@@ -542,7 +542,13 @@ def _untouched_counts() -> dict:
               ("notifications", Notification),
               ("documents", Document), ("document_versions", DocumentVersion),
               ("document_links", DocumentLink))
-    return {name: model.query.count() for name, model in models}
+    counts = {name: model.query.count() for name, model in models}
+    # 【document-lifecycle-depth §2.4 D-3】回收站里的那部分单列一行，与上面的文档三表
+    # 并列。本工具**不**清理它——那是 tools/purge_trash.py 的职责，两个工具各自单一职责。
+    from services.documents import trash
+
+    counts["documents_in_trash"] = Document.query.filter(trash.is_deleted()).count()
+    return counts
 
 
 # ————————————————————— 报告渲染 —————————————————————

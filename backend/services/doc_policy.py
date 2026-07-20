@@ -74,6 +74,27 @@ def assert_thresholds(config) -> None:
         )
 
 
+def assert_text_document_extension(config) -> None:
+    """启动期断言：`md` **必须**在扩展名白名单内（document-lifecycle-depth §2.3 C-1）。
+
+    模板新建与 Agent 归档都从零造文件身份，扩展名恒为 `md`
+    （`service.create_text_document` 的不变量 1）。运维把 md 从白名单里摘掉却留着这两条
+    路径，应当**起不来**，而不是在用户点「用模板新建」时抛一个语义不明的 500。
+
+    与 `assert_thresholds` **并列注册**而不是塞进它内部：两者校验的是彼此无关的两件事，
+    合并会让「阈值断言」的既有调用方（含用例）被迫连带提供扩展名白名单。
+
+    Raises:
+        ValueError: `md` 不在 `DOC_ALLOWED_EXTENSIONS` 内。
+    """
+    allowed = tuple(config.get("DOC_ALLOWED_EXTENSIONS", ()))
+    if "md" not in allowed:
+        raise ValueError(
+            "DOC_ALLOWED_EXTENSIONS must contain 'md': document templates and agent "
+            f"archiving both create .md files from scratch (got {sorted(allowed)})"
+        )
+
+
 def expectations(entity: str, status: str) -> tuple:
     """该（实体, 状态）期望的文档类型元组；未登记的组合返回空元组（不阻断、不报错）。"""
     return STAGE_DOC_EXPECTATIONS.get((entity, status), ())

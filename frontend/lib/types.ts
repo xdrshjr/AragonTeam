@@ -299,7 +299,10 @@ export interface SearchResults {
   query: string;
   requirements: Requirement[];
   bugs: Bug[];
-  counts: { requirements: number; bugs: number };
+  /** document-lifecycle-depth §2.1 A-1：第三个命中桶。 */
+  documents: DocumentSummary[];
+  /** `counts` 是**必填对象**——`GlobalSearch` 直接解构它，后端空信封同样补齐三个键。 */
+  counts: { requirements: number; bugs: number; documents: number };
 }
 
 // —— admin-console：管理台写操作载荷型 ——
@@ -450,6 +453,10 @@ export interface DocumentSummary {
   editable: boolean;
   /** 仅上传响应携带：后端命中了去重，本次没有真的写盘。 */
   deduped?: boolean;
+  /** 非空即在回收站（document-lifecycle-depth §5.2）。 */
+  deleted_at: string | null;
+  /** 删除者概要；未删除时为 null。 */
+  deleted_by: AuthorSummary | null;
   created_at: string;
   updated_at: string;
 }
@@ -470,10 +477,33 @@ export interface TicketDocument extends DocumentSummary {
   link: DocumentLink;
 }
 
+/** 详情端点富化过的绑定：多一个工单标题，供「被引用 N」浮层直接渲染。 */
+export interface DocumentLinkWithTitle extends DocumentLink {
+  /** 工单已被删（防御性路径）时为 null。 */
+  entity_title: string | null;
+}
+
 export interface DocumentDetail extends DocumentSummary {
   versions: DocumentVersion[];
-  links: DocumentLink[];
+  links: DocumentLinkWithTitle[];
 }
+
+/** `GET /api/documents/meta`（§4.6）——模板清单 + 回收站保留期，前端不得硬编码。 */
+export interface DocumentTemplate {
+  kind: DocumentKind;
+  label: string;
+  summary: string;
+}
+
+export interface DocumentMeta {
+  templates: DocumentTemplate[];
+  trash_retention_days: number;
+  /** `DOC_TEXT_PREVIEW_MAX_BYTES`——截断横幅的文案用它，**前端不得硬编码 1 MB**。 */
+  text_preview_max_bytes: number;
+}
+
+/** 文档库列表的排序维度（后端白名单，非枚举值 400）。 */
+export type DocumentSort = "recent" | "title" | "size" | "links";
 
 export interface DocumentContent {
   content: string;

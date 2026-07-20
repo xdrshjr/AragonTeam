@@ -52,6 +52,18 @@ class Document(db.Model):
     # 无外键：与 document_versions 互相引用会成环（见模块 docstring）。
     current_version_id = db.Column(db.Integer, nullable=True)
 
+    # —— 软删除（document-lifecycle-depth §5.1）——
+    # 三条刻意的取舍，改动前请先读 §5.1：
+    #   1. `deleted_by_id` **不建外键**——`create_all` 会为 ForeignKey 生成
+    #      `REFERENCES users(id)`，而 `schema_sync` 的 ADD COLUMN 片段不会，于是全新库
+    #      与存量库的约束不一致，而 `PRAGMA foreign_keys=ON` 在两种库上表现不同。
+    #      宁可少一个约束，也不要两种库跑出两种行为（用户解析走 `_resolve_author`，
+    #      本就不依赖外键）。
+    #   2. **不加索引**：`schema_sync` 加不了索引，只写在模型里就是「新库有、存量库没有」。
+    #   3. 默认 NULL、无 NOT NULL：存量行天然全部「未删除」，零回填。
+    deleted_at = db.Column(db.DateTime, nullable=True)
+    deleted_by_id = db.Column(db.Integer, nullable=True)
+
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=utcnow, onupdate=utcnow)
 
@@ -60,6 +72,11 @@ class Document(db.Model):
         db.Index("ix_documents_kind", "kind"),
     )
 
+    @property
+    def is_deleted(self) -> bool:
+        """是否在回收站里。判据的**查询侧**唯一出处是 `services/documents/trash.py`。"""
+        return self.deleted_at is not None
+
     def resolve_uploader(self):
         """上传者概要；已删除时降级为占位（复用 comment 的多态解析策略）。"""
         if self.uploader_id is None:
@@ -67,6 +84,14 @@ class Document(db.Model):
         from .comment import _resolve_author
 
         return _resolve_author("user", self.uploader_id)
+
+    def resolve_deleted_by(self):
+        """删除者概要；未删除返回 None（回收站列表要显示「谁删的」）。"""
+        if self.deleted_by_id is None:
+            return None
+        from .comment import _resolve_author
+
+        return _resolve_author("user", self.deleted_by_id)
 
     def current_version(self):
         """当前版本对象；`current_version_id` 为空或指向已删除行时返回 None。"""
@@ -97,6 +122,9 @@ class Document(db.Model):
             "current_version": current.to_dict() if current else None,
             "link_count": link_count,
             "editable": is_text_editable(current),
+            # 非空即在回收站（§5.2）。前端据此渲染回收站行与「恢复」入口。
+            "deleted_at": _iso(self.deleted_at),
+            "deleted_by": self.resolve_deleted_by(),
             "created_at": _iso(self.created_at),
             "updated_at": _iso(self.updated_at),
         }

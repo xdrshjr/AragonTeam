@@ -10,12 +10,18 @@ import {
   type UploadOptions,
 } from "@/lib/api";
 import { invalidateDocumentViews, invalidateTicketViews } from "@/lib/swr-keys";
-import type { DocumentDetail, DocumentSummary } from "@/lib/types";
+import type { DocumentDetail, DocumentSort, DocumentSummary } from "@/lib/types";
 
 export interface LibraryFilters {
   q?: string;
   kind?: string;
   projectId?: number | null;
+  /** document-lifecycle-depth §2.1 A-2：排序维度（后端白名单，非枚举值 400）。 */
+  sort?: DocumentSort;
+  /** 上传人筛选——**后端早已实现**，本轮只是前端补上出口。 */
+  uploaderId?: number;
+  /** 只看没有绑定任何工单的文档（治理盲点：传了没用上的）。 */
+  unlinked?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -23,17 +29,23 @@ export interface LibraryFilters {
 /** 文档库分页 / 筛选 / 上传 / 删除（ticket-document-management §3.4）。 */
 export function useDocumentLibrary(filters: LibraryFilters = {}) {
   const { mutate } = useSWRConfig();
-  const { q, kind, projectId, limit = 50, offset = 0 } = filters;
+  const {
+    q, kind, projectId, sort, uploaderId, unlinked, limit = 50, offset = 0,
+  } = filters;
 
   const key = useMemo(() => {
     const params = new URLSearchParams();
     if (q) params.set("q", q);
     if (kind) params.set("kind", kind);
     if (projectId != null) params.set("project_id", String(projectId));
+    // `recent` 是后端默认值，不传即可——少一个查询参数就少一份 SWR key 的碎片化。
+    if (sort && sort !== "recent") params.set("sort", sort);
+    if (uploaderId != null) params.set("uploader_id", String(uploaderId));
+    if (unlinked) params.set("unlinked", "1");
     params.set("limit", String(limit));
     params.set("offset", String(offset));
     return `/documents?${params.toString()}`;
-  }, [q, kind, projectId, limit, offset]);
+  }, [q, kind, projectId, sort, uploaderId, unlinked, limit, offset]);
 
   const { data, error, isLoading, mutate: mutateList } =
     useSWR<{ items: DocumentSummary[]; total: number }>(key, listFetcher);

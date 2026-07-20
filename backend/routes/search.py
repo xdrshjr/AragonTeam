@@ -21,9 +21,12 @@ def global_search():
     limit = want_query_int("limit", default=search.DEFAULT_LIMIT,
                            minimum=1, maximum=search.MAX_LIMIT, clamp=True)
     if not keyword:
+        # 【document-lifecycle-depth §2.1 A-1】空信封**必须**与 `search_all` 同形状：
+        # 前端 `GlobalSearch` 直接解构 `data.counts.documents` 并 `.map` 结果数组，
+        # 少一个键就是清空搜索框时的一次运行时崩溃。
         return jsonify({
-            "query": "", "requirements": [], "bugs": [],
-            "counts": {"requirements": 0, "bugs": 0},
+            "query": "", "requirements": [], "bugs": [], "documents": [],
+            "counts": {"requirements": 0, "bugs": 0, "documents": 0},
         }), 200
     result = search.search_all(keyword, limit)
     result["query"] = keyword

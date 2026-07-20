@@ -213,6 +213,21 @@ def open_blob(sha256: str) -> BinaryIO:
         raise StorageUnavailable(f"cannot read blob {sha256}: {exc}") from exc
 
 
+def blob_exists(sha256: str) -> bool:
+    """该摘要的 blob 是否真的躺在磁盘上。
+
+    版本回滚的前置校验（§2.2 B-3）：**绝不允许**建出一行指向空气的版本——那会让用户
+    点一次回滚就把「当前版本」变成一个下载即 410 的空壳。畸形摘要一律视为不存在
+    （与 `blob_path` 的 ValueError 语义一致，但调用方要的是一个布尔而不是一个异常）。
+
+    路径推导仍只有 `blob_path` 一处，本函数不自己拼路径。
+    """
+    try:
+        return blob_path(sha256).exists()
+    except (ValueError, OSError):
+        return False
+
+
 def read_text(sha256: str, max_bytes: int) -> TextRead:
     """读取最多 max_bytes 字节并解码为文本。
 

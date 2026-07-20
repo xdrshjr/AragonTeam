@@ -15,11 +15,18 @@
 
 【R-04】单步推进为同步单事务，Agent 已提交终态恒为 idle；`busy` 只在
 `run=all`（逐步 commit）下才产生可观测窗口，故本模块不在单步内切 busy。
+
+【document-lifecycle-depth §2.3 C-2】`advance_one` 里的**两处**归档接线是有顺序约束的：
+`archive_prepare` 必须在 `ticket.status` 改写**之前**（落盘在 SQLite 写锁窗口之外），
+`archive_commit` 必须在 `Activity.log` **之后**（pysqlite 的 SAVEPOINT 需要事务已打开）。
+两者都是「错了不会报错、只会安静地错」的位置，理由逐条写在
+`services/documents/agent_archive.py` 的模块 docstring 里，改动前请先读它。
 """
 from extensions import db
 from models.comment import Comment
 from models.activity import Activity
 from services import workflow, agent_executor, doc_policy, positions
+from services.documents import agent_archive
 
 # run=all 连续推进的硬上限，防死循环（§7 风险表）。
 MAX_AGENT_STEPS = 6
@@ -95,11 +102,25 @@ def advance_one(entity: str, ticket, agent):
 
     frm = ticket.status
 
-    # 【P1-1 / 放行条件 C1】先产出正文：generate_work 只读 feed + 可选 LLM。此刻 session
-    # 无挂起写，feed 查询不会 autoflush 出任何 UPDATE，故 LLM 全程不持有 SQLite 写锁；
-    # LLM 未启用 / 失败 / 空返回一律降级回 message（模板），恒返回非空正文（见 agent_executor）。
-    body = agent_executor.generate_work(
+    # 【P1-1 / 放行条件 C1】先产出正文：generate_work_product 只读 feed + 可选 LLM。此刻
+    # session 无挂起写，feed 查询不会 autoflush 出任何 UPDATE，故 LLM 全程不持有 SQLite
+    # 写锁；LLM 未启用 / 失败 / 空返回一律降级回 message（模板），恒返回非空正文。
+    product = agent_executor.generate_work_product(
         entity, ticket, agent, to, fallback_message=message)
+    body = product.text
+
+    # 【document-lifecycle-depth §2.3 C-2 · 评审 V-03】归档是**两段式**，两处接线的
+    # 位置本身就是约束：
+    #   ① archive_prepare 在 ticket.status 改写**之前**——此刻 session 无挂起写、不持有
+    #      SQLite 写锁，全部磁盘 IO（落盘）发生在这里。挪到下面去，就是把磁盘 IO 塞进
+    #      写锁窗口，上一轮 R-7 那个坑的原样重演。
+    #   ② archive_commit 在 Activity.log **之后**——它用 SAVEPOINT 隔离失败，而
+    #      pysqlite 的 SAVEPOINT 依赖「调用点之前已有挂起写」这个前置条件才真实生效
+    #      （见 services/documents/agent_archive.py 模块 docstring ②）。
+    # 目标阶段显式传 `to`，**不**读 ticket.status——此刻它还是旧状态。
+    # 变量名**不能**叫 `plan`：模块级已有一个同名函数（本函数第一行就在调它），
+    # 局部赋值会把它变成局部名并让那次调用抛 UnboundLocalError。
+    archive_plan = agent_archive.archive_prepare(entity, ticket, agent, to, product)
 
     # 【ticket-document-management §2.4 铁律 2】Agent 路径**永不被文档门禁挡住**——
     # 它是后台循环，被挡住会表现为「自动流水线莫名其妙不动了」，而没有任何一个人会
@@ -124,4 +145,7 @@ def advance_one(entity: str, ticket, agent):
         entity, ticket.id, "agent_advanced", actor=("agent", agent.id),
         from_status=frm, to_status=to, message=message,
     )
+
+    # ② 元数据写入：无磁盘 IO；SAVEPOINT 的前置条件（已有挂起写）由上面四行保证。
+    agent_archive.archive_commit(archive_plan, entity, ticket, agent)
     return to, comment, activity
