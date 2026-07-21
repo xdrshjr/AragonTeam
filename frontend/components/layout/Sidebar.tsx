@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
+import { BrandLockup } from "@/components/brand/BrandLogo";
 
 interface NavItem {
   href: string;
@@ -86,11 +87,8 @@ export default function Sidebar() {
 
   return (
     <aside className="flex w-56 shrink-0 flex-col border-r border-border bg-surface">
-      <div className="flex h-16 items-center gap-2 border-b border-border px-5">
-        <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-clay font-serif text-sm font-bold text-white">
-          A
-        </span>
-        <span className="font-serif text-lg text-ink">AragonTeam</span>
+      <div className="flex h-16 items-center border-b border-border px-5">
+        <BrandLockup className="h-7 w-[166px]" priority />
       </div>
 
       <nav className="flex-1 space-y-1 p-3">

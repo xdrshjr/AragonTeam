@@ -7,6 +7,10 @@ export const metadata: Metadata = {
   title: "AragonTeam — AI 时代的团队协作平台",
   description:
     "面向 AI 时代的团队协作与研发管理平台：Agent 是一等公民的执行者。",
+  icons: {
+    icon: [{ url: "/brand/aragonteam-icon.png", type: "image/png" }],
+    apple: [{ url: "/brand/aragonteam-icon.png", type: "image/png" }],
+  },
 };
 
 export default function RootLayout({

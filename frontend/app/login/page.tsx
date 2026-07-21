@@ -7,6 +7,7 @@ import { useToast } from "@/lib/toast";
 import { ApiError } from "@/lib/api";
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
+import { BrandLockup } from "@/components/brand/BrandLogo";
 
 // 默认账号（seed），点击可一键填充。
 // 示例数据每类只留一条（data-persistence-and-seed-slimming §2.5），因此这里也只剩
@@ -51,7 +52,7 @@ export default function LoginPage() {
     <div className="flex min-h-screen">
       {/* 左侧品牌区 */}
       <div className="hidden flex-1 flex-col justify-between bg-clay-soft/40 p-12 lg:flex">
-        <div className="font-serif text-2xl text-clay-dark">AragonTeam</div>
+        <BrandLockup className="h-10 w-[236px]" priority />
         <div className="max-w-md">
           <h1 className="font-serif text-4xl leading-tight text-ink">
             AI 时代的
@@ -70,7 +71,7 @@ export default function LoginPage() {
       <div className="flex flex-1 items-center justify-center bg-bg p-6">
         <div className="w-full max-w-sm">
           <div className="mb-8 lg:hidden">
-            <div className="font-serif text-2xl text-clay-dark">AragonTeam</div>
+            <BrandLockup className="h-9 w-[212px]" priority />
           </div>
           <h2 className="font-serif text-2xl text-ink">欢迎回来</h2>
           <p className="mt-1 text-sm text-ink-muted">登录以进入你的工作台</p>
