@@ -1,0 +1,9 @@
+[Unit]
+Description=aragonteam Health Check Watchdog
+After=aragonteam-backend.service
+After=aragonteam-frontend.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/aragonteam/ops/healthcheck.sh
+User=root

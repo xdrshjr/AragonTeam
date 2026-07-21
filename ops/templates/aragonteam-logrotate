@@ -1,0 +1,10 @@
+/opt/aragonteam/logs/*.log {
+    size 50M
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    create 0644 aragonteam aragonteam
+}

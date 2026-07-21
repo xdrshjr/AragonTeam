@@ -1,0 +1,10 @@
+[Unit]
+Description=aragonteam Watchdog Timer
+
+[Timer]
+OnBootSec=120
+OnUnitActiveSec=60s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
