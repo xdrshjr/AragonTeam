@@ -8,12 +8,21 @@ import { useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import { useToast } from "@/lib/toast";
 import { useAuth } from "@/lib/auth";
-import type { User, Role, UserCreate, UserUpdate } from "@/lib/types";
+import type { CreatedUser, User, Role, UserCreate, UserUpdate } from "@/lib/types";
 import { ROLE_LABELS } from "@/lib/constants";
+import { useRegistrationMeta } from "@/hooks/useRegistrationMeta";
 import Modal from "@/components/ui/Modal";
 import Input from "@/components/ui/Input";
 import Select from "@/components/ui/Select";
 import Button from "@/components/ui/Button";
+import Toggle from "@/components/ui/Toggle";
+import PasswordStrength, { isPasswordAcceptable } from "@/components/auth/PasswordStrength";
+
+/** 建号 / 重置成功后回传给调用方：非空时由团队页弹一次性口令对话框。 */
+export interface TemporaryPasswordResult {
+  password: string;
+  memberName: string;
+}
 
 export type MemberFormState =
   | { mode: "create" }
@@ -23,12 +32,13 @@ export type MemberFormState =
 interface Props {
   state: MemberFormState | null; // null → 关闭
   onClose: () => void;
-  onSaved: () => void; // 成功后：关闭 + mutate("/users")
+  /** 成功后：关闭 + mutate("/users")；带 result 时还要展示一次性口令（§6.2）。 */
+  onSaved: (result?: TemporaryPasswordResult) => void;
 }
 
 interface SubProps {
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (result?: TemporaryPasswordResult) => void;
 }
 
 const ROLE_OPTIONS = (["admin", "pm", "member"] as Role[]).map((r) => ({
@@ -69,29 +79,48 @@ function FormActions({ onClose, onSubmit, submitting, submitLabel }: {
 
 function CreateMemberForm({ onClose, onSaved }: SubProps) {
   const toast = useToast();
+  const { policy } = useRegistrationMeta();
   const [username, setUsername] = useState("");
+  // 【§6.4】默认「自动生成一次性密码」——本轮 UX 的核心主张：
+  // **管理员不该替别人想密码**，产品要让「正确的事」成为默认路径。
+  const [autoGenerate, setAutoGenerate] = useState(true);
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<Role>("member");
   const [submitting, setSubmitting] = useState(false);
 
+  function validate(): string | null {
+    if (!username.trim()) return "用户名为必填";
+    if (!autoGenerate) {
+      if (!password) return "请填写初始密码，或改用自动生成";
+      if (!isPasswordAcceptable(password, username, policy)) return "密码不满足下方的强度要求";
+    }
+    if (email.trim() && !EMAIL_RE.test(email.trim())) return "邮箱格式不正确";
+    return null;
+  }
+
   async function onSubmit() {
-    if (!username.trim() || !password) return toast.error("用户名与密码为必填");
-    if (password.length < 6) return toast.error("密码至少 6 位");
-    if (email.trim() && !EMAIL_RE.test(email.trim())) return toast.error("邮箱格式不正确");
+    const invalid = validate();
+    if (invalid) return toast.error(invalid);
     setSubmitting(true);
     try {
       const payload: UserCreate = {
         username: username.trim(),
-        password,
+        // 不传 password → 服务端生成一次性口令，并在 201 里回传**唯一一次**。
+        password: autoGenerate ? undefined : password,
         role,
         display_name: displayName.trim() || undefined,
         email: email.trim() || undefined,
       };
-      const u = await api.post<User>("/users", payload);
-      toast.success(`已创建成员 ${u.display_name || u.username}`);
-      onSaved();
+      const created = await api.post<CreatedUser>("/users", payload);
+      const name = created.display_name || created.username;
+      toast.success(`已创建成员 ${name}`);
+      onSaved(
+        created.temporary_password
+          ? { password: created.temporary_password, memberName: name }
+          : undefined
+      );
     } catch (err) {
       toast.error(errText(err));
     } finally {
@@ -103,8 +132,24 @@ function CreateMemberForm({ onClose, onSaved }: SubProps) {
     <div className="flex flex-col gap-4">
       <Input label="用户名" value={username} onChange={(e) => setUsername(e.target.value)}
              maxLength={64} placeholder="登录用户名" />
-      <Input label="初始密码" type="password" value={password}
-             onChange={(e) => setPassword(e.target.value)} placeholder="至少 6 位" />
+
+      <div className="flex flex-col gap-2 rounded-lg border border-border bg-black/[0.02] p-3">
+        <Toggle checked={autoGenerate} onChange={setAutoGenerate}
+                label="自动生成一次性密码（推荐）" />
+        <p className="text-xs text-ink-muted">
+          {autoGenerate
+            ? "创建后会显示一次，请立刻发给对方；他首次登录必须修改，在那之前无法使用其他功能。"
+            : "你设置的密码同样只是一次性的：对方首次登录后必须修改。"}
+        </p>
+        {!autoGenerate && (
+          <div className="mt-1 flex flex-col gap-2">
+            <Input label="初始密码" type="password" autoComplete="new-password" value={password}
+                   onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
+            <PasswordStrength password={password} username={username} policy={policy} />
+          </div>
+        )}
+      </div>
+
       <Input label="显示名称" value={displayName} onChange={(e) => setDisplayName(e.target.value)}
              maxLength={128} placeholder="留空则同用户名" />
       <Input label="邮箱" type="email" value={email} onChange={(e) => setEmail(e.target.value)}
@@ -182,18 +227,37 @@ function EditMemberForm({ user, onClose, onSaved }: SubProps & { user: User }) {
 
 function ResetPasswordForm({ user, onClose, onSaved }: SubProps & { user: User }) {
   const toast = useToast();
+  const { policy } = useRegistrationMeta();
+  const [autoGenerate, setAutoGenerate] = useState(true);
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const name = user.display_name || user.username;
+
+  function validate(): string | null {
+    if (autoGenerate) return null;
+    if (!isPasswordAcceptable(password, user.username, policy)) return "密码不满足下方的强度要求";
+    if (password !== confirm) return "两次输入的密码不一致";
+    return null;
+  }
 
   async function onSubmit() {
-    if (password.length < 6) return toast.error("新密码至少 6 位");
-    if (password !== confirm) return toast.error("两次输入的密码不一致");
+    const invalid = validate();
+    if (invalid) return toast.error(invalid);
     setSubmitting(true);
     try {
-      await api.patch<User>(`/users/${user.id}`, { password });
-      toast.success(`已重置 ${user.display_name || user.username} 的密码`);
-      onSaved();
+      // 【§2.2 B-4②】走**专属端点**而不是 PATCH /users/:id：它的根管理员守卫与请求体
+      // 无关（空 body 同样 409），且它是唯一会回传一次性口令的那条路。
+      const res = await api.post<{ user: User; temporary_password: string | null }>(
+        `/users/${user.id}/reset-password`,
+        autoGenerate ? {} : { password }
+      );
+      toast.success(`已重置 ${name} 的密码`);
+      onSaved(
+        res.temporary_password
+          ? { password: res.temporary_password, memberName: name }
+          : undefined
+      );
     } catch (err) {
       toast.error(errText(err));
     } finally {
@@ -226,12 +290,25 @@ function ResetPasswordForm({ user, onClose, onSaved }: SubProps & { user: User }
   return (
     <div className="flex flex-col gap-4">
       <p className="text-sm text-ink-muted">
-        为 <span className="font-medium text-ink">{user.display_name || user.username}</span> 设置新密码。
+        为 <span className="font-medium text-ink">{name}</span> 重置密码。
+        重置后旧密码立即失效，他首次登录必须设置新密码——
+        <span className="text-ink">你不需要、也不应该知道同事的长期密码。</span>
       </p>
-      <Input label="新密码" type="password" value={password}
-             onChange={(e) => setPassword(e.target.value)} placeholder="至少 6 位" />
-      <Input label="确认新密码" type="password" value={confirm}
-             onChange={(e) => setConfirm(e.target.value)} />
+
+      <div className="flex flex-col gap-2 rounded-lg border border-border bg-black/[0.02] p-3">
+        <Toggle checked={autoGenerate} onChange={setAutoGenerate}
+                label="自动生成一次性密码（推荐）" />
+        {!autoGenerate && (
+          <div className="mt-1 flex flex-col gap-2">
+            <Input label="新密码" type="password" autoComplete="new-password" value={password}
+                   onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
+            <PasswordStrength password={password} username={user.username} policy={policy} />
+            <Input label="确认新密码" type="password" autoComplete="new-password" value={confirm}
+                   onChange={(e) => setConfirm(e.target.value)} />
+          </div>
+        )}
+      </div>
+
       <FormActions onClose={onClose} onSubmit={onSubmit} submitting={submitting} submitLabel="重置密码" />
     </div>
   );

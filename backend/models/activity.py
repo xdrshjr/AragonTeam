@@ -5,8 +5,15 @@
 """
 from extensions import db, utcnow
 
-ENTITY_TYPES = ("requirement", "bug")
+# 【account-security-and-governance §2.3 C-1】实体维度扩到账号与站点设置。
+# 工单实体**单独成组**：`GET /api/stats` 与所有面向全员的时间线查询都只认这一组，
+# 治理事件绝不能漏进仪表盘「最近动态」（那是一次实打实的信息泄露）。
+TICKET_ENTITY_TYPES = ("requirement", "bug")
+ENTITY_TYPES = TICKET_ENTITY_TYPES + ("user", "app_setting")
 ACTOR_TYPES = ("user", "agent", "system")
+
+# app_setting 是站点级单例，没有自然主键；用 0 作哨兵 entity_id（该列 nullable=False）。
+APP_SETTING_ENTITY_ID = 0
 
 
 class Activity(db.Model):
@@ -16,6 +23,10 @@ class Activity(db.Model):
     entity_type = db.Column(db.String(16), nullable=False)  # requirement | bug
     entity_id = db.Column(db.Integer, nullable=False)
     action = db.Column(db.String(32), nullable=False)  # created | assigned | moved | converted ...
+    # 【account-security-and-governance §2.3 C-1】这两列**同时**承载账号治理的取值迁移
+    # （「角色 A → 角色 B」「active → disabled」）。算不算语义滥用？算一点。但替代方案是
+    # 为一个纯展示用途在一张已上线的表上再加两列（from_value/to_value）——schema_sync 登记 +
+    # 存量库 ALTER + 两条永远二选一的空列，代价明显高于收益。
     from_status = db.Column(db.String(24), nullable=True)
     to_status = db.Column(db.String(24), nullable=True)
     actor_type = db.Column(db.String(16), nullable=True)  # user | agent | system

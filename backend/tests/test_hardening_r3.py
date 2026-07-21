@@ -177,7 +177,7 @@ def test_oversized_strings_return_400(client, auth):
     assert r.status_code == 400
     # 合法输入行为不变。
     r = client.post("/api/users",
-                    json={"username": "u3", "password": "p", "email": "u3@example.com"},
+                    json={"username": "u3", "password": "Aragon2026", "email": "u3@example.com"},
                     headers=headers)
     assert r.status_code == 201
 

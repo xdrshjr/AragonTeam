@@ -50,8 +50,50 @@ export interface User {
   is_root: boolean;
   /** 账号来源，仅供治理展示，**不参与任何前端鉴权判断**。 */
   source: UserSource;
+  /** true = 口令是别人设的（管理员建号 / 重置），本人尚未改过。
+   *  后端有一道全局闸门：带此标记的人在改掉口令之前，除了读「我是谁」和改密码以外
+   *  任何 `/api/*` 都是 403（account-security-and-governance §2.2 B-3）。 */
+  must_change_password: boolean;
   created_at: string;
   updated_at: string;
+}
+
+/** 全站口令策略，由 `GET /auth/registration-meta` 下发（§2.1 A-3）。
+ *  前端**不再硬编码**任何阈值：根管理员把 PASSWORD_MIN_LENGTH 调高之后，
+ *  注册页的规则清单与提交拦截必须当场跟着变。 */
+export interface PasswordPolicy {
+  minLength: number;
+  maxLength: number;
+  minCharClasses: number;
+}
+
+/** 账号治理审计的动作枚举（后端 services/audit.py::USER_ACTIONS 的镜像）。 */
+export type UserActivityAction =
+  | "user_created"
+  | "user_registered"
+  | "role_changed"
+  | "activated"
+  | "deactivated"
+  | "password_reset"
+  | "password_changed";
+
+/** `GET /users/:id/activities` 的一行（Activity.to_dict()）。 */
+export interface UserActivity {
+  id: number;
+  entity_type: "user";
+  entity_id: number;
+  action: UserActivityAction;
+  from_status: string | null;
+  to_status: string | null;
+  actor_type: AuthorType | null;
+  actor_id: number | null;
+  message: string | null;
+  created_at: string;
+}
+
+/** `POST /users` 与 `POST /users/:id/reset-password` 的响应：一次性口令**仅此一次**可读。 */
+export interface CreatedUser extends User {
+  temporary_password: string | null;
 }
 
 export interface Agent {
@@ -338,7 +380,9 @@ export interface SearchResults {
 // POST /api/users（admin）——建成员。
 export interface UserCreate {
   username: string;
-  password: string;
+  /** **可选**（account-security-and-governance §4.1）：缺省时服务端生成一次性口令，
+   *  201 响应体带一个只能读一次的 `temporary_password`。 */
+  password?: string;
   role: Role;
   display_name?: string;
   email?: string;
@@ -385,6 +429,9 @@ export interface RegistrationMeta {
   enabled: boolean;
   invite_required: boolean;
   password_min_length: number;
+  /** account-security-and-governance §2.1 A-3：additive 两键（策略下发）。 */
+  password_max_length: number;
+  password_min_char_classes: number;
 }
 
 /** `GET/PATCH /settings/registration` 的响应；`invite_code` 明文，仅根管理员可读。 */

@@ -10,6 +10,13 @@ interface Props {
   children: ReactNode;
   footer?: ReactNode;
   width?: number;
+  /** 点遮罩是否关闭。默认 true（既有全部调用点行为逐字不变）。
+   *
+   *  置 false 只关掉**遮罩**这一条路径，Esc 与标题栏的 ✕ 照常可用——那两个是用户的
+   *  明确动作，而遮罩误点不是。给「关掉就丢数据」的对话框（如一次性口令）用。
+   *  **不要**用「把 onClose 传成空函数」来代替它：那会让标题栏那个 aria-label="关闭"
+   *  的按钮变成一个点了没反应的死控件，键盘与读屏用户尤其受伤。 */
+  dismissOnBackdrop?: boolean;
 }
 
 const FOCUSABLE =
@@ -24,6 +31,7 @@ export default function Modal({
   children,
   footer,
   width = 520,
+  dismissOnBackdrop = true,
 }: Props) {
   const panelRef = useRef<HTMLDivElement>(null);
   const restoreRef = useRef<HTMLElement | null>(null);
@@ -79,7 +87,7 @@ export default function Modal({
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-ink/30 p-4 pt-[8vh]"
-      onMouseDown={onClose}
+      onMouseDown={dismissOnBackdrop ? onClose : undefined}
     >
       <div
         ref={panelRef}

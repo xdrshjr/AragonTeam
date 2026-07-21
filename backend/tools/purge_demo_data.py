@@ -375,6 +375,12 @@ def _user_references(user_id: int) -> int:
         + Project.query.filter_by(owner_id=user_id).count()
         + Comment.query.filter_by(author_type="user", author_id=user_id).count()
         + Activity.query.filter_by(actor_type="user", actor_id=user_id).count()
+        # 【account-security-and-governance §2.3 C-5-2】上一行数的是「这个人**做过**治理
+        # 动作」，这一行数的是「这个人**被**治理过」。两半都要有：一条 role_changed 同时
+        # 指向施动者与被改的人，只计一半仍会漏掉「从没做过管理动作、但被停用过一次」的
+        # 普通成员——他被硬删后，SQLite 复用主键，下一个同 id 的用户会继承这段治理时间线
+        # （lifecycle.py:164-166 记录过的「时间线串档」在账号维度的翻版）。
+        + Activity.query.filter_by(entity_type="user", entity_id=user_id).count()
         + Notification.query.filter_by(user_id=user_id).count()
         + Notification.query.filter_by(actor_type="user", actor_id=user_id).count()
     )

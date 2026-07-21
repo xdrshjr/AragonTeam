@@ -9,6 +9,14 @@
 示例 BUG / 示例评论一行都不会写入，「首次启动开箱有内容」这条既有承诺当场失效（§7 R-4）。
 
 本模块**绝不打印密码**。
+
+**本模块不得 import `services/accounts.py` 或 `services/passwords.py`**
+（account-security-and-governance §7 R-14）。破窗路径有意不依赖任何口令策略：让
+`ensure_root_admin` 也过一遍策略，意味着存量部署里一个 7 位的 `ROOT_ADMIN_PASSWORD`
+会让**应用起不来**——而这个账号是唯一的破窗入口，等于把一次配置瑕疵升级成一次
+完全无法自愈的全站宕机。`_warn_about_weak_setup` 的启动期 warning 才是这条风险的
+正确处置方式：**告警，不阻断**。同理，本模块建号 / 同步口令时**恒不置位**
+`must_change_password`：破窗的场景恰恰是「别的路都断了」，这条路必须最短。
 """
 from extensions import db
 from models.user import User

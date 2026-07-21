@@ -27,7 +27,7 @@ def test_me_requires_token(client):
 
 
 def test_register_is_admin_only(client, auth):
-    payload = {"username": "newbie", "password": "pw12345", "role": "member"}
+    payload = {"username": "newbie", "password": "Pw123456", "role": "member"}
     # member 无权 register
     r = client.post("/api/auth/register", json=payload, headers=auth("member"))
     assert r.status_code == 403

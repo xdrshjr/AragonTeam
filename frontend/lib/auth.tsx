@@ -67,6 +67,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("aragon:unauthorized", onUnauth);
   }, []);
 
+  // 【account-security-and-governance §2.2 B-3】强制改密闸门的 403：**这不是登出**。
+  // token 仍然有效，只是这个人欠一次改密——重新拉一次 /auth/me 把
+  // must_change_password 读回来，(app)/layout 的守卫据此把他送去 /force-password。
+  // 监听器与 restore() 在同一个组件里，作用域天然可达（对外仍只暴露 refresh()）。
+  useEffect(() => {
+    function onPasswordChangeRequired() {
+      restore();
+    }
+    window.addEventListener("aragon:password-change-required", onPasswordChangeRequired);
+    return () =>
+      window.removeEventListener("aragon:password-change-required", onPasswordChangeRequired);
+  }, [restore]);
+
   const login = useCallback(async (username: string, password: string) => {
     const { token, user } = await api.post<{ token: string; user: User }>(
       "/auth/login",

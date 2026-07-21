@@ -34,6 +34,12 @@ class User(db.Model):
     # 账号来源，取值见 USER_SOURCES。默认 'admin'：存量行确实都是管理员建的。
     source = db.Column(db.String(16), nullable=False, default="admin",
                        server_default="admin")
+    # 【account-security-and-governance §2.2 B-1】true = 该账号的口令是别人设的
+    # （管理员建号 / 管理员重置），本人尚未改过。带此标记的人只能读「我是谁」和改密码，
+    # 其余 /api/* 一律 403（services/auth_helpers.py::install_password_gate）。
+    # 默认 False：存量行零回填即获得正确语义——他们的口令确实是自己在用的那个。
+    must_change_password = db.Column(db.Boolean, nullable=False, default=False,
+                                     server_default="0")
 
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=utcnow, onupdate=utcnow)
@@ -61,6 +67,10 @@ class User(db.Model):
             # 指派选择器与时间线不关心谁是根管理员，多传只会让 AssigneeSummary 变胖。
             "is_root": bool(self.is_root),
             "source": self.source or "admin",
+            # 【account-security-and-governance §2.2 B-1】additive：前端据此把人跳到
+            # /force-password。**summary() 同样有意不加**——指派选择器与时间线不关心
+            # 这件事，多传只会让 AssigneeSummary 变胖。
+            "must_change_password": bool(self.must_change_password),
             "created_at": _iso(self.created_at),
             "updated_at": _iso(self.updated_at),
         }

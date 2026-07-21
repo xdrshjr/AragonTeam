@@ -29,6 +29,9 @@ ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     # 一步把那一行标起来。
     ("users", "is_root", "BOOLEAN NOT NULL DEFAULT 0"),
     ("users", "source", "VARCHAR(16) NOT NULL DEFAULT 'admin'"),
+    # account-security-and-governance §5.1：强制改密标记。存量行零回填即语义正确——
+    # 他们的口令确实是自己在用的那个，不该被闸门拦住。
+    ("users", "must_change_password", "BOOLEAN NOT NULL DEFAULT 0"),
 ]
 
 

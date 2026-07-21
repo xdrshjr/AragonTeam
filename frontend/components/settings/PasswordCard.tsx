@@ -3,21 +3,30 @@
 import { useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import { useToast } from "@/lib/toast";
+import { useAuth } from "@/lib/auth";
+import { useRegistrationMeta } from "@/hooks/useRegistrationMeta";
 import Input from "@/components/ui/Input";
 import Button from "@/components/ui/Button";
+import PasswordStrength, { isPasswordAcceptable } from "@/components/auth/PasswordStrength";
 
-// 修改密码卡（account-settings §7）：三密码框；前端先校 new==confirm 与长度，
-// 后端校旧密码。成功清空三框并 toast；后端 400 直接 toast 其 error。
+// 修改密码卡（account-settings §7）：三密码框；前端先校强度与 new==confirm，后端校旧密码。
+// 成功清空三框并 toast；后端 400 直接 toast 其 error。
+//
+// 【account-security-and-governance §2.1 A-3 / P2-2】此前这里硬编码「至少 6 位」两处
+// （校验 + label），与注册页的 8 位公然分叉——用户读到的是「6 位」，提交却被后端按
+// 8 位拒掉。现在两处都由**同一份下发策略**驱动，规则清单与注册页逐条一致。
 export default function PasswordCard() {
   const toast = useToast();
+  const { user } = useAuth();
+  const { policy } = useRegistrationMeta();
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
   const [saving, setSaving] = useState(false);
 
   async function onSave() {
-    if (next.length < 6) {
-      toast.error("新密码至少 6 位");
+    if (!isPasswordAcceptable(next, user?.username ?? "", policy)) {
+      toast.error("新密码不满足下方的强度要求");
       return;
     }
     if (next !== confirm) {
@@ -51,13 +60,16 @@ export default function PasswordCard() {
           value={current}
           onChange={(e) => setCurrent(e.target.value)}
         />
-        <Input
-          label="新密码（至少 6 位）"
-          type="password"
-          autoComplete="new-password"
-          value={next}
-          onChange={(e) => setNext(e.target.value)}
-        />
+        <div className="flex flex-col gap-2">
+          <Input
+            label="新密码"
+            type="password"
+            autoComplete="new-password"
+            value={next}
+            onChange={(e) => setNext(e.target.value)}
+          />
+          <PasswordStrength password={next} username={user?.username ?? ""} policy={policy} />
+        </div>
         <Input
           label="确认新密码"
           type="password"

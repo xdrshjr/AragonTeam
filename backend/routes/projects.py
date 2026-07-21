@@ -144,8 +144,10 @@ def delete_project(project_id):
     refs = lifecycle.project_references(project_id)
     if refs["requirements"] or refs["bugs"]:
         return lifecycle.conflict_project_has_tickets(refs)
-    # 【G3③】破坏性动作必须可回溯。Activity 只承载 requirement/bug 两种实体
-    # （models/activity.py::ENTITY_TYPES），故项目 / Agent 的删除走结构化日志。
+    # 【G3③】破坏性动作必须可回溯。Activity 现已承载 user / app_setting
+    # （account-security-and-governance §2.3 C-1），但**项目 / Agent 的删除有意仍走
+    # 结构化日志**：它们不是账号治理，给它们建实体维度会让 entity_type 从「有语义的
+    # 实体维度」退化成一个什么都装的垃圾桶（该轮 §10 明确的非目标）。
     actor = current_user()
     log.info("project deleted: id=%s key=%s by=%s",
              project.id, project.key, actor.username if actor else "system")

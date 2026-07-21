@@ -79,6 +79,18 @@ export function signalUnauthorizedIfNeeded(path: string, status: number) {
   }
 }
 
+/** 后端强制改密闸门的 403（account-security-and-governance §4.6）。
+ *
+ *  形状与上面的 `signalUnauthorizedIfNeeded` 逐条对齐，**但绝不 `setToken(null)`**——
+ *  那是登出，而这里的语义是「你还登录着，只是欠一次改密」。由 AuthProvider 订阅后
+ *  刷新登录态，`(app)/layout` 的既有守卫据此把人送去 `/force-password`。
+ */
+export function signalPasswordChangeRequired(status: number, error?: string) {
+  if (status === 403 && error === "password change required" && typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("aragon:password-change-required"));
+  }
+}
+
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = "GET", body, params } = options;
 
@@ -124,6 +136,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 
   if (!res.ok) {
     signalUnauthorizedIfNeeded(path, res.status);
+    signalPasswordChangeRequired(res.status, data?.error);
     const message =
       (data && (data.error as string)) || `请求失败（${res.status}）`;
     throw new ApiError(res.status, message, data?.detail, data?.allowed);
@@ -183,6 +196,7 @@ export async function getWithHeaders<T>(
   }
   if (!res.ok) {
     signalUnauthorizedIfNeeded(path, res.status);
+    signalPasswordChangeRequired(res.status, body?.error);
     const message = (body && (body.error as string)) || `请求失败（${res.status}）`;
     throw new ApiError(res.status, message, body?.detail, body?.allowed);
   }

@@ -13,7 +13,15 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
 
   useEffect(() => {
-    if (!loading && !user) router.replace("/login");
+    if (loading) return;
+    if (!user) {
+      router.replace("/login");
+      return;
+    }
+    // 【account-security-and-governance §2.2 B-3】口令由别人设的人在改掉它之前
+    // 寸步难行——后端有一道硬闸门，这里只是让他不必先撞一堵 403 墙。
+    // 排在 `!user → /login` **之后**：未登录时读 user.must_change_password 没有意义。
+    if (user.must_change_password) router.replace("/force-password");
   }, [user, loading, router]);
 
   // 会话复原中或未登录（即将跳转）时显示占位，避免闪现未授权内容。

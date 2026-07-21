@@ -46,6 +46,11 @@ INVITE_CODE_MIN, INVITE_CODE_MAX = 4, 64
 # 人类可口述、可手抄：去掉 0/O/1/l/I 等易混字符。
 _CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 
+# 【account-security-and-governance §2.4 D-2】内置保留用户名表（casefold 后比较）。
+# 与 RESERVED_USERNAMES 配置项和 ROOT_ADMIN_USERNAME 取并集，见 reserved_usernames()。
+_BUILTIN_RESERVED = ("admin", "administrator", "root", "system", "aragon",
+                     "api", "support", "security", "me", "null", "undefined")
+
 _TRUE_LITERALS = ("true", "1", "yes", "on")
 _FALSE_LITERALS = ("false", "0", "no", "off")
 
@@ -216,17 +221,42 @@ def verify_invite_code(candidate: str) -> bool:
                                expected.encode("utf-8"))
 
 
-def is_reserved_username(username: str) -> bool:
-    """该用户名是否被系统保留（当前只有 `ROOT_ADMIN_USERNAME` 一个，§7 R-15）。
+def reserved_usernames() -> frozenset:
+    """当前生效的保留名集合（全部 casefold 后比较）。
 
-    两条注册路径（`POST /auth/signup` 与 `POST /api/users`）必须共用本判据，
-    不得各写一份——否则堵住一条、漏掉另一条，抢注提权路径依然敞着。
+    = 内置表 ∪ `RESERVED_USERNAMES` 配置项 ∪ `{ROOT_ADMIN_USERNAME}`。
+    空配置项、空白项一律忽略；空的 `ROOT_ADMIN_USERNAME` 不入集（与现状一致）。
+
+    `me` / `null` / `undefined` 在内置表里，是因为它们是前端路由与 JSON 序列化里最典型的
+    歧义源（`/api/users/me` 这类路径在未来一定会有人想加）。现在拦下的成本是零。
+
+    Returns:
+        casefold 后的保留名 frozenset。
+    """
+    names = set(_BUILTIN_RESERVED)
+    extra = str(current_app.config.get("RESERVED_USERNAMES", "") or "")
+    names.update(part.strip().casefold() for part in extra.split(",") if part.strip())
+    root = str(current_app.config.get("ROOT_ADMIN_USERNAME", "")).strip()
+    if root:
+        names.add(root.casefold())
+    return frozenset(names)
+
+
+def is_reserved_username(username: str) -> bool:
+    """该用户名是否被系统保留（account-security-and-governance §2.4 D-2）。
+
+    三条建号路径（`POST /auth/signup`、`POST /api/users`、`POST /auth/register`）必须
+    共用本判据，不得各写一份——否则堵住一条、漏掉另一条，抢注提权路径依然敞着
+    （上一轮 register 就漏了这道守卫，本轮由 services/accounts.py 的合并动作补上）。
 
     比较用 `casefold()`：SQLite 的 username 唯一索引是大小写敏感的，`Admin` 能建出来，
     而 `ensure_root_admin` 按精确名查找不到它——但它在人眼里就是管理员，
     仍然是一次社工面上的风险。
+
+    **只作用于「新建账号」这一刻**，不追溯任何存量行：一个叫 `system` 的既有账号继续
+    正常登录、正常被改资料。
     """
-    reserved = str(current_app.config.get("ROOT_ADMIN_USERNAME", "")).strip()
-    if not reserved:
+    candidate = (username or "").strip().casefold()
+    if not candidate:
         return False
-    return (username or "").strip().casefold() == reserved.casefold()
+    return candidate in reserved_usernames()

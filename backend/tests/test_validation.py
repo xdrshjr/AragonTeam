@@ -351,7 +351,7 @@ def test_create_agent_empty_kind_defaults_generic(client, auth):
 
 def test_register_empty_role_defaults_member(client, auth):
     r = client.post("/api/auth/register",
-                    json={"username": "r1", "password": "pw12345", "role": ""},
+                    json={"username": "r1", "password": "Pw123456", "role": ""},
                     headers=auth("admin"))
     assert r.status_code == 201
     assert r.get_json()["user"]["role"] == "member"

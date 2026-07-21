@@ -1,11 +1,17 @@
-"""用户路由（§4.2）。list / create / get / patch。"""
+"""用户路由（§4.2 + account-security-and-governance §2.2 / §2.3）。
+
+list / create / get / patch / **reset-password** / **activities**。
+
+建号已下沉到 `services/accounts.py::create_user_by_admin`（与 `POST /api/auth/register`
+共用同一份实现）；本模块只负责响应形状与状态码。
+"""
 from flask import Blueprint, jsonify
 from flask_jwt_extended import jwt_required
 from sqlalchemy import or_
 
 from extensions import db
 from models.user import User, ROLES, USER_SOURCES
-from services import app_settings, avatars, lifecycle
+from services import accounts, audit, lifecycle, passwords
 from services.auth_helpers import current_user, require_role
 from services.pagination import paginate, with_total_count
 from services.scope import want_query_bool, want_query_str
@@ -62,33 +68,20 @@ def list_users():
 @bp.post("")
 @require_role("admin")
 def create_user():
-    # 【§2.2】非串 username/display_name → 400（此前 .strip() 500）；role 走 choices 归一。
-    # 【§2.6③】max_len 对齐 models/user.py 列宽（username 64 / display_name 128 / email 255）。
-    data = json_body()
-    username = want_str(data, "username", max_len=64)
-    password = want_str(data, "password", strip=False)
-    role = want_str(data, "role", default="member", choices=ROLES)
-    display_name = want_str(data, "display_name", max_len=128) or username
-    # 【§2.4-C2 / §2.6③】非串 email → 400；超长 / 格式非法 → 400（此前管理员路径两者都没有）。
-    email = want_email(data)
+    """建号（account-security-and-governance §4.1）。
 
-    if not username or not password:
-        return jsonify({"error": "username and password are required"}), 400
-    # 【self-service-registration §2.2 B-4 / R-15】保留用户名守卫：否则管理员仍能建出一个
-    # 叫 ROOT_ADMIN_USERNAME 的普通成员，等下一次重启被 ensure_root_admin 静默提成
-    # 不可降级的根管理员。响应体与下面的普通重名 409 **逐字节相同**，不额外泄露
-    # 「这个名字是根管理员用户名」这一条信息。
-    if app_settings.is_reserved_username(username):
+    `password` **可选**：缺省时服务端生成一次性口令，201 响应体额外带一个
+    `temporary_password`（明文，**仅此一次**，之后任何接口都读不回来）。
+    """
+    try:
+        user = accounts.create_user_by_admin(json_body(), current_user(),
+                                             allow_generated=True)
+    except accounts.UsernameTaken:
         return jsonify({"error": "username already exists"}), 409
-    if User.query.filter_by(username=username).first():
-        return jsonify({"error": "username already exists"}), 409
-
-    user = User(username=username, role=role, display_name=display_name, email=email,
-                source="admin", avatar_color=avatars.pick_color(username))
-    user.set_password(password)
-    db.session.add(user)
     db.session.commit()
-    return jsonify(user.to_dict()), 201
+    body = user.to_dict()
+    body["temporary_password"] = getattr(user, "temporary_password", None)
+    return jsonify(body), 201
 
 
 @bp.get("/<int:user_id>")
@@ -106,6 +99,11 @@ def _reject_root_mutation(user, data, *, new_role, new_active):
     保护的是**治理锚点**本身，不是这个人的资料：改角色 / 停用 / 被他人重置密码会让
     「所有人都被锁在门外时还能靠改配置 + 重启破窗」这条恢复路径失效
     （self-service-registration §2.1 A-4 的拦截矩阵）。
+
+    **本函数只服务 `PATCH /api/users/:id`；它的口令分支以 `data["password"]` 存在为前提，
+    任何 body 可空的端点都不得复用它。** 复用会让判据恒假 → 任意 admin 都能重置根管理员
+    的口令并接管破窗账号（account-security-and-governance 评审 P0-1）。`reset_password`
+    因此另写了一条与请求体无关的判据。
 
     Args:
         user: 被改动的用户。
@@ -156,11 +154,25 @@ def patch_user(user_id):
             lifecycle.would_orphan_admins(user, new_role=new_role, new_active=new_active):
         return lifecycle.conflict_last_admin()
 
+    actor = current_user()
     changed = False
     if new_role is not None:
+        # 【account-security-and-governance §2.3 C-3-3】治理动作留痕：改角色 / 停用 /
+        # 启用 / 重置口令此前**零审计**，第二天没有任何人能说出这些事发生过。
+        if new_role != user.role:
+            audit.log_user_event(
+                user, "role_changed", actor, from_value=user.role, to_value=new_role,
+                message=f"把角色从「{audit.role_label(user.role)}」"
+                        f"改为「{audit.role_label(new_role)}」")
         user.role = new_role
         changed = True
     if new_active is not None:
+        if bool(new_active) != bool(user.is_active):
+            audit.log_user_event(
+                user, "activated" if new_active else "deactivated", actor,
+                from_value="active" if user.is_active else "disabled",
+                to_value="active" if new_active else "disabled",
+                message="启用了该账号" if new_active else "停用了该账号")
         user.is_active = new_active
         changed = True
     if "display_name" in data:
@@ -172,7 +184,9 @@ def patch_user(user_id):
         user.email = want_email(data)
         changed = True
     if data.get("password"):
-        user.set_password(want_str(data, "password", strip=False, required=True))
+        # 【account-security-and-governance §2.1 A-2】本轮起这条路径也过全站策略。
+        _apply_new_password(user, want_str(data, "password", strip=False, required=True),
+                            actor)
         changed = True
 
     # 【P2-5】与 patch_requirement 的 changed 模式对齐：此前无字段被识别仍返 200 +
@@ -182,3 +196,80 @@ def patch_user(user_id):
 
     db.session.commit()
     return jsonify(user.to_dict()), 200
+
+
+def _apply_new_password(user, password: str, actor) -> None:
+    """校验并写入一个由管理台设置的口令，同步置 / 清标记并写审计（**不 commit**）。
+
+    `PATCH /api/users/:id` 与 `POST /api/users/:id/reset-password` 共用本函数——
+    两条路径的置位判据必须是同一份，否则「谁改了谁的口令」这个语义会在两处漂移。
+
+    Args:
+        user: 被改口令的账号。
+        password: 已由调用方取出的明文口令（尚未过策略）。
+        actor: 施动者。
+
+    Raises:
+        ValidationError: 口令不满足策略（→ 全局 400）。
+    """
+    passwords.validate_password(password, username=user.username)
+    user.set_password(password)
+    # 【§2.2 B-2 / 评审 P1-7】判据是「谁改了谁的口令」，不是「走了哪条路径」：
+    # 无条件置位会让任何用管理台给自己改密的人（含根管理员）当场被闸门自锁。
+    user.must_change_password = accounts.should_force_change(actor, user)
+    if user.must_change_password:
+        audit.log_user_event(user, "password_reset", actor,
+                             message="重置了该账号的密码，下次登录需修改")
+    else:
+        audit.log_user_event(user, "password_changed", actor, message="修改了自己的密码")
+
+
+@bp.post("/<int:user_id>/reset-password")
+@require_role("admin")
+def reset_password(user_id):
+    """重置口令（account-security-and-governance §4.2）。
+
+    body 可空（服务端生成一次性口令）或 `{"password": "..."}`（管理员指定，仍过策略）。
+
+    **判定顺序是契约的一部分**：404 → 409 根管理员保护 → 读 body → 400 口令策略。
+    """
+    user = db.session.get(User, user_id)
+    if user is None:
+        return jsonify({"error": "user not found"}), 404
+    # 【§2.2 B-4② / 评审 P0-1】判据是「谁在重置谁」，**与请求体无关**——本端点的主用法
+    # 是空 body。绝不复用 `_reject_root_mutation`：那个函数的口令分支挂在
+    # `data.get("password")` 上，对空 body 恒放行，在这里就是一个失败开放的后门
+    # （任意 admin 拿到根管理员的一次性口令 = 完全接管破窗账号）。
+    actor = current_user()
+    if lifecycle.is_protected_root(user) and (actor is None or actor.id != user.id):
+        return lifecycle.conflict_root_admin(
+            "only the root administrator can change its own password")
+
+    explicit = want_str(json_body(), "password", strip=False)
+    generated = not explicit
+    password = explicit or passwords.generate_temporary_password()
+    _apply_new_password(user, password, actor)
+    db.session.commit()
+    return jsonify({
+        "user": user.to_dict(),
+        # 明文，**仅此一次**：管理员指定的口令由他自己知道，不必回传。
+        "temporary_password": password if generated else None,
+    }), 200
+
+
+@bp.get("/<int:user_id>/activities")
+@require_role("admin")
+def user_activities(user_id):
+    """该账号的治理时间线（account-security-and-governance §4.3）。
+
+    `require_role("admin")` 而非 `require_root()`：普通 admin 本来就能改这个人的角色与
+    状态，让他看不到自己刚做的动作没有道理。响应体是**裸数组** + `X-Total-Count`，
+    与 `GET /api/users` 的既有形状一致。
+    """
+    user = db.session.get(User, user_id)
+    if user is None:
+        # 「不存在」与「没有动态」是两件事，不返回空数组。
+        return jsonify({"error": "user not found"}), 404
+    rows, total = paginate(audit.user_timeline(user.id))
+    resp = jsonify([a.to_dict() for a in rows])
+    return with_total_count(resp, total), 200

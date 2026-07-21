@@ -15,6 +15,8 @@ import type { SignupPayload } from "@/lib/types";
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
 import PasswordStrength, { isPasswordAcceptable } from "@/components/auth/PasswordStrength";
+import { useRegistrationMeta } from "@/hooks/useRegistrationMeta";
+import type { PasswordPolicy } from "@/lib/types";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -26,8 +28,12 @@ const EMPTY: Form = {
   username: "", display_name: "", email: "", password: "", confirm: "", invite_code: "",
 };
 
-/** 单字段校验；返回错误文案或 undefined。规则与后端逐条对应（§6.1 第 2 条）。 */
-function validateField(field: Field, form: Form): string | undefined {
+/** 单字段校验；返回错误文案或 undefined。规则与后端逐条对应（§6.1 第 2 条）。
+ *
+ * 【account-security-and-governance §2.1 A-3 ②】`policy` **必须**一路传到
+ * `isPasswordAcceptable`：它是带默认值的可选参数，漏传不会有任何编译错误，
+ * 但后果正是本产品反复承诺要避免的「界面说没问题、提交却 400」。 */
+function validateField(field: Field, form: Form, policy: PasswordPolicy): string | undefined {
   const value = form[field].trim();
   if (field === "username") {
     if (!value) return "请填写用户名";
@@ -35,7 +41,7 @@ function validateField(field: Field, form: Form): string | undefined {
   }
   if (field === "display_name" && value.length > 128) return "显示名称最多 128 个字符";
   if (field === "email" && value && !EMAIL_RE.test(value)) return "邮箱格式不正确";
-  if (field === "password" && !isPasswordAcceptable(form.password, form.username)) {
+  if (field === "password" && !isPasswordAcceptable(form.password, form.username, policy)) {
     return "密码不满足下方的强度要求";
   }
   // 确认密码只在两次都非空且不一致时报错，不阻塞输入（§6.1 第 3 条）。
@@ -52,10 +58,10 @@ const VALIDATED_FIELDS: Field[] = [
   "username", "display_name", "email", "password", "confirm", "invite_code",
 ];
 
-function validateAll(form: Form): Errors {
+function validateAll(form: Form, policy: PasswordPolicy): Errors {
   const errors: Errors = {};
   for (const field of VALIDATED_FIELDS) {
-    const message = validateField(field, form);
+    const message = validateField(field, form, policy);
     if (message) errors[field] = message;
   }
   return errors;
@@ -88,6 +94,7 @@ export default function RegisterForm() {
   const router = useRouter();
   const { signup } = useAuth();
   const toast = useToast();
+  const { policy } = useRegistrationMeta();
   const [form, setForm] = useState<Form>(EMPTY);
   const [errors, setErrors] = useState<Errors>({});
   const [submitting, setSubmitting] = useState(false);
@@ -100,7 +107,7 @@ export default function RegisterForm() {
   }
 
   function blur(field: Field) {
-    setErrors((prev) => ({ ...prev, [field]: validateField(field, form) }));
+    setErrors((prev) => ({ ...prev, [field]: validateField(field, form, policy) }));
   }
 
   function focusField(field: Field) {
@@ -109,7 +116,7 @@ export default function RegisterForm() {
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const found = validateAll(form);
+    const found = validateAll(form, policy);
     if (Object.keys(found).length > 0) {
       setErrors(found);
       focusField(Object.keys(found)[0] as Field);
@@ -169,7 +176,7 @@ export default function RegisterForm() {
       <div className="flex flex-col gap-2">
         <Input label="密码" name="password" type="password" autoComplete="new-password"
                placeholder="••••••••" {...bind("password")} />
-        <PasswordStrength password={form.password} username={form.username} />
+        <PasswordStrength password={form.password} username={form.username} policy={policy} />
         <FieldError message={errors.password} />
       </div>
       <div>

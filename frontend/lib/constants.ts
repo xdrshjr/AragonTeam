@@ -8,6 +8,7 @@ import type {
   NotificationType,
   Priority,
   Severity,
+  UserActivityAction,
   UserSource,
 } from "@/lib/types";
 
@@ -325,4 +326,39 @@ export function isTextExtension(extension: string): boolean {
 /** 该扩展名是否走 Markdown 渲染视图（其余文本类型行为逐字节不变，仍是 `<pre>`）。 */
 export function isMarkdownExtension(extension: string): boolean {
   return extension === "md" || extension === "markdown";
+}
+
+
+// —— account-security-and-governance §3.5：账号治理动作的中文名 + 图标 ——
+//
+// 类型是 `Record<UserActivityAction, string>` 而不是 `Record<string, string>`：
+// 与上面两个通知 map 同款手法——后端新增一个治理动作而前端忘了加标签时，
+// 这里会**编译失败**，而不是在团队页的时间线里显示一串英文原文。
+export const USER_ACTIVITY_LABELS: Record<UserActivityAction, string> = {
+  user_created: "创建账号",
+  user_registered: "自助注册",
+  role_changed: "角色变更",
+  activated: "启用账号",
+  deactivated: "停用账号",
+  password_reset: "重置密码",
+  password_changed: "修改密码",
+};
+
+export const USER_ACTIVITY_ICONS: Record<UserActivityAction, string> = {
+  user_created: "✚",
+  user_registered: "🎉",
+  role_changed: "⇄",
+  activated: "✓",
+  deactivated: "⊘",
+  password_reset: "🔑",
+  password_changed: "🔒",
+};
+
+/** 运行时兜底只为一种情形保留：后端比这份 bundle 新，推来了前端还不认识的动作。 */
+export function userActivityLabel(action: UserActivityAction): string {
+  return USER_ACTIVITY_LABELS[action] || action;
+}
+
+export function userActivityIcon(action: UserActivityAction): string {
+  return USER_ACTIVITY_ICONS[action] || "•";
 }

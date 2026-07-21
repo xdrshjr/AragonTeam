@@ -14,7 +14,7 @@ from models.requirement import Requirement
 from models.bug import Bug
 from models.agent import Agent
 from models.user import User
-from models.activity import Activity
+from models.activity import Activity, TICKET_ENTITY_TYPES
 from services import workflow
 from services.scope import apply_project_filter, project_scope
 
@@ -49,12 +49,17 @@ def stats():
     for a in agents:
         agent_counts[a.status] = agent_counts.get(a.status, 0) + 1
 
-    recent = Activity.query.order_by(
-        Activity.created_at.desc(), Activity.id.desc()).limit(10).all()
+    # 【account-security-and-governance §2.3 C-5-1】两处查询都必须钉死在**工单实体**上。
+    # activities 的实体维度本轮扩到了 user / app_setting，不过滤的话「停用了张三」会出现在
+    # **所有成员**都能打开的仪表盘「最近动态」里——那是一次实打实的信息泄露；而且前端按
+    # entity_type 渲染跳转链接，user 类型会渲染成一个指向不存在工单的死链。
+    recent = Activity.query.filter(Activity.entity_type.in_(TICKET_ENTITY_TYPES))\
+        .order_by(Activity.created_at.desc(), Activity.id.desc()).limit(10).all()
 
     # Phase-2 §2.7：本周（近 7 天）活动数，供仪表盘小计。
     week_ago = utcnow() - timedelta(days=7)
     activities_this_week = Activity.query.filter(
+        Activity.entity_type.in_(TICKET_ENTITY_TYPES),
         Activity.created_at >= week_ago).count()
 
     total_agents = len(agents)

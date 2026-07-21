@@ -27,7 +27,7 @@ from models.requirement import Requirement
 from models.bug import Bug
 from models.notification import NOTIFICATION_TYPES
 from services.auth_helpers import current_user
-from services import notification_prefs
+from services import audit, notification_prefs, passwords
 from services.validation import json_body, want_email, want_str
 
 bp = Blueprint("me", __name__, url_prefix="/api/me")
@@ -37,11 +37,10 @@ WORK_LIMIT = 100
 
 # 头像底色严格 #RRGGBB。邮箱校验已下沉到 services/validation.py::want_email
 # （self-service-registration 评审 P0-1：三条改资料 / 注册路径共用同一份规则）。
+# 口令规则同理已下沉到 services/passwords.py::validate_password
+# （account-security-and-governance §2.1 A-2）：本模块此前持有的 6 位下限是
+# 全站四条口令路径里最松的一条，与注册页的 8 位公然分叉。
 _COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
-
-# 密码长度区间（§6.2）。
-_PASSWORD_MIN = 6
-_PASSWORD_MAX = 128
 
 
 def _assigned(model, user_id):
@@ -128,11 +127,15 @@ def change_password():
         return jsonify({"error": "current_password and new_password are required"}), 400
     if not user.check_password(current_password):
         return jsonify({"error": "current password is incorrect"}), 400
-    if not _PASSWORD_MIN <= len(new_password) <= _PASSWORD_MAX:
-        return jsonify({"error": f"new password must be {_PASSWORD_MIN}..{_PASSWORD_MAX} chars"}), 400
-    if new_password == current_password:
-        return jsonify({"error": "new password must differ from current"}), 400
+    # 【account-security-and-governance §2.1 A-2】旧口令判据**必须排在策略之前**：
+    # 先告诉一个不知道旧口令的人「你的新口令太弱」，是在给猜口令的人提供反馈。
+    # 「新旧不同」这条判据搬进了 validate_password 的规则 4，错误串逐字保留。
+    passwords.validate_password(new_password, username=user.username,
+                                current_password=current_password)
     user.set_password(new_password)
+    # 【§2.2 B-2】这正是闸门要的动作：清标记 + 留痕。
+    user.must_change_password = False
+    audit.log_user_event(user, "password_changed", user, message="修改了自己的密码")
     db.session.commit()
     # JWT 无状态不吊销（§10 R4）：旧 token 在过期前仍有效，属 MVP 可接受权衡。
     return jsonify({"ok": True}), 200

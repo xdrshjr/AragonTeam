@@ -9,7 +9,9 @@ from .agent import Agent, AGENT_KINDS, AGENT_STATUSES
 from .project import Project
 from .requirement import Requirement, PRIORITIES, ASSIGNEE_TYPES
 from .bug import Bug, SEVERITIES
-from .activity import Activity, ENTITY_TYPES, ACTOR_TYPES
+from .activity import (
+    Activity, ENTITY_TYPES, TICKET_ENTITY_TYPES, ACTOR_TYPES, APP_SETTING_ENTITY_ID,
+)
 from .comment import Comment, COMMENT_AUTHOR_TYPES, COMMENT_ENTITY_TYPES
 from .notification import Notification, NOTIFICATION_TYPES
 from .notification_preference import NotificationPreference
@@ -27,7 +29,10 @@ __all__ = [
     "Project",
     "Requirement", "PRIORITIES", "ASSIGNEE_TYPES",
     "Bug", "SEVERITIES",
-    "Activity", "ENTITY_TYPES", "ACTOR_TYPES",
+    # 【account-security-and-governance §3.2 / 评审 P2-3】新增的两个符号同样两处登记：
+    # 本仓库的符号再导出约定，不登记就是一个新孤岛（CLAUDE.md 评审清单第 8 条）。
+    "Activity", "ENTITY_TYPES", "TICKET_ENTITY_TYPES", "ACTOR_TYPES",
+    "APP_SETTING_ENTITY_ID",
     "Comment", "COMMENT_AUTHOR_TYPES", "COMMENT_ENTITY_TYPES",
     "Notification", "NOTIFICATION_TYPES",
     "NotificationPreference",

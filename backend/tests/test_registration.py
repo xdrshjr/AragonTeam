@@ -302,12 +302,12 @@ def test_respects_notification_preference(client, app, auth):
 def test_admin_register_endpoint_unchanged(client, auth):
     """`POST /auth/register` 仍是 admin-only、仍不校验邀请码——契约逐字不变。"""
     anonymous = client.post("/api/auth/register",
-                            json={"username": "x1", "password": "pw12345"})
+                            json={"username": "x1", "password": "Pw123456"})
     as_member = client.post("/api/auth/register",
-                            json={"username": "x1", "password": "pw12345"},
+                            json={"username": "x1", "password": "Pw123456"},
                             headers=auth("member"))
     as_admin = client.post("/api/auth/register",
-                           json={"username": "x1", "password": "pw12345"},
+                           json={"username": "x1", "password": "Pw123456"},
                            headers=auth("admin"))
 
     assert anonymous.status_code == 401
@@ -320,7 +320,10 @@ def test_registration_meta_is_public_and_leaks_no_code(client):
 
     assert r.status_code == 200
     body = r.get_json()
-    assert body == {"enabled": True, "invite_required": True, "password_min_length": 8}
+    # account-security-and-governance §2.1 A-3：additive 两键（策略下发），既有三键逐字不变。
+    assert body == {"enabled": True, "invite_required": True,
+                    "password_min_length": 8, "password_max_length": 128,
+                    "password_min_char_classes": 2}
     assert "invite_code" not in body
 
 

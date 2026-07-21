@@ -2,17 +2,27 @@
 
 login（含限流）/ me / register(admin) / **signup（公开自助注册）** / registration-meta（公开）。
 
-既有 `POST /api/auth/register` 的鉴权与请求契约**逐字不变**——它被存量测试与管理台使用，
-改动它等于破坏性变更。自助注册是**全新端点** `/api/auth/signup`。
+`POST /api/auth/register` 的**鉴权与字段形状**仍逐字不变（admin-only、password 仍必填、
+201 仍是 `{"user": ...}`、顶层结构上不可能出现 `temporary_password`），但
+account-security-and-governance §4.1′ 有意改了三处：
+
+1. 口令改由全站策略判定 → 弱口令由 201 变 **400**（本轮唯一一次有意的破坏性变更）；
+2. 命中保留用户名 → **409**（这不是破坏性变更，是补一个真实存在的缺口：合并前
+   `routes/users.py` 有这道守卫、本文件没有）；
+3. 实现下沉到 `services/accounts.py::create_user_by_admin`，与 `POST /api/users` 共用。
+
+自助注册是**全新端点** `/api/auth/signup`。
 """
 from flask import Blueprint, jsonify, current_app
 from flask_jwt_extended import create_access_token, jwt_required
 from sqlalchemy.exc import IntegrityError
 
 from extensions import db
-from models.user import User, ROLES
+from models.user import User
 from services.auth_helpers import current_user, require_role
-from services import app_settings, avatars, notifications, passwords, ratelimit
+from services import (
+    accounts, app_settings, audit, avatars, notifications, passwords, ratelimit,
+)
 from services.validation import json_body, want_email, want_str
 
 bp = Blueprint("auth", __name__, url_prefix="/api/auth")
@@ -63,26 +73,17 @@ def me():
 @bp.post("/register")
 @require_role("admin")
 def register():
-    # 【§2.2】非串 username/display_name → 400（此前 .strip() 500）；role 走 choices 归一。
-    # 【§2.6③】max_len 对齐 models/user.py 列宽（username String(64) / display_name String(128)）。
-    data = json_body()
-    username = want_str(data, "username", max_len=64)
-    password = want_str(data, "password", strip=False)
-    role = want_str(data, "role", default="member", choices=ROLES)
-    display_name = want_str(data, "display_name", max_len=128) or username
-    # 【§2.4-C2】非串 email（{"x":1}）绑到 String 列 → commit 触 InterfaceError 500；
-    # want_str 保证非串即 400。缺省/空 → None（保持既有宽松语义，格式校验仍只在 me.py 自助改资料处）。
-    email = want_str(data, "email", required=False) or None
+    """管理员建号的**兼容端点**（account-security-and-governance §4.1′）。
 
-    if not username or not password:
-        return jsonify({"error": "username and password are required"}), 400
-    if User.query.filter_by(username=username).first():
+    `allow_generated=False` 是这条路由与 `POST /api/users` 的**全部**差异：缺 password
+    仍是既有的 400，而不是「服务端生成一次性口令」。register 有意不获得那个新能力——
+    它是给存量管理台与脚本用的兼容端点，扩它的能力面等于制造第二个主入口。
+    """
+    try:
+        user = accounts.create_user_by_admin(json_body(), current_user(),
+                                             allow_generated=False)
+    except accounts.UsernameTaken:
         return jsonify({"error": "username already exists"}), 409
-
-    user = User(username=username, role=role, display_name=display_name, email=email,
-                source="admin", avatar_color=avatars.pick_color(username))
-    user.set_password(password)
-    db.session.add(user)
     db.session.commit()
     return jsonify({"user": user.to_dict()}), 201
 
@@ -98,10 +99,17 @@ def registration_meta():
     开关模式共用同一份渲染逻辑（§2.2 B-3）。
     """
     settings = app_settings.get_registration_settings()
+    policy = passwords.policy()
     return jsonify({
         "enabled": settings["enabled"],
         "invite_required": True,
-        "password_min_length": passwords.PASSWORD_MIN_LENGTH,
+        # 【account-security-and-governance §2.1 A-3】策略下发：前端不再硬编码任何阈值。
+        # 既有键逐字不变，只是改读 policy()；另两键 additive。
+        # **有意复用这个公开端点**：注册页本来就要读它，零新增往返；而口令策略本身
+        # 不是秘密——它印在每一个注册页上。
+        "password_min_length": policy["min_length"],
+        "password_max_length": policy["max_length"],
+        "password_min_char_classes": policy["min_char_classes"],
     }), 200
 
 
@@ -164,8 +172,12 @@ def _create_signup_user(settings, *, username, password, display_name, email):
     user.set_password(password)
     try:
         db.session.add(user)
-        db.session.flush()                       # 拿到 user.id 供通知引用
+        db.session.flush()                       # 拿到 user.id 供通知与审计引用
         notifications.notify_user_registered(user)
+        # 【account-security-and-governance §2.3 C-3-2】施动者就是本人：自助注册是
+        # 「他自己把自己加进来了」，审计的读者需要看到这一点。
+        audit.log_user_event(user, "user_registered", user, to_value=user.role,
+                             message="通过邀请码自助注册")
         db.session.commit()
     except IntegrityError:
         # username 唯一索引下两个并发同名注册，输家在 commit 时抛 IntegrityError，

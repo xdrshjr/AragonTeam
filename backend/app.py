@@ -86,6 +86,11 @@ def create_app(config_class=Config):
     from routes import register_blueprints
     register_blueprints(app)
 
+    # —— 全局闸门：带 must_change_password 标记的人在改掉口令之前寸步难行 ——
+    # 【account-security-and-governance §2.2 B-3】这不是前端的善意提示，是服务端的硬约束。
+    from services import auth_helpers
+    auth_helpers.install_password_gate(app)
+
     # 健康检查（无需鉴权）。Phase-2 §2.5-6：附 DB 探活，供部署探针。
     @app.get("/api/health")
     def health():

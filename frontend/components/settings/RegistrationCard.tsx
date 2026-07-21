@@ -14,6 +14,8 @@ import { ROLE_LABELS } from "@/lib/constants";
 import type { Role } from "@/lib/types";
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
+// 【account-security-and-governance §3.5】内联的 CopyButton 已提取为共用组件（本轮第三个调用点）。
+import CopyButton from "@/components/ui/CopyButton";
 import Select from "@/components/ui/Select";
 import Toggle from "@/components/ui/Toggle";
 import ConfirmDialog from "@/components/ui/ConfirmDialog";
@@ -22,26 +24,6 @@ import { SkeletonRows } from "@/components/ui/Skeleton";
 
 function errText(err: unknown): string {
   return err instanceof ApiError ? err.message : "保存失败";
-}
-
-/** 只读展示 + 一键复制。复制失败（非安全上下文 / 无权限）必须说出来，不能假装成功。 */
-function CopyButton({ value, label }: { value: string; label: string }) {
-  const toast = useToast();
-
-  async function onCopy() {
-    try {
-      await navigator.clipboard.writeText(value);
-      toast.success(`${label}已复制`);
-    } catch {
-      toast.error("浏览器拒绝了复制，请手动选中");
-    }
-  }
-
-  return (
-    <Button variant="ghost" size="sm" onClick={onCopy}>
-      复制
-    </Button>
-  );
 }
 
 export default function RegistrationCard() {

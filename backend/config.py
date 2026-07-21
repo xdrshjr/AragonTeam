@@ -136,6 +136,24 @@ class Config:
     # 选「显式配置」而不是无脑接 ProxyFix：无条件信任转发头等于把限流键交给客户端伪造。
     TRUST_PROXY_COUNT = _env_int("TRUST_PROXY_COUNT", 0)
 
+    # —— 全站口令策略（account-security-and-governance §2.1）——
+    # 这两个值是**旋钮，不是真相**：真相在 services/passwords.py::policy()，它会把取值
+    # 钳到 [6, 128] / [1, 4]。钳位不是防御性编程，是给一个人类可写的旋钮加物理止挡——
+    # `PASSWORD_MIN_LENGTH=0` 会让策略静默变成「没有策略」，`=999` 会让**所有人**
+    # （包括根管理员）都改不了密码，那是一个手滑造成的、产品内无恢复路径的死锁。
+    PASSWORD_MIN_LENGTH = _env_int("PASSWORD_MIN_LENGTH", 8)
+    PASSWORD_MIN_CHAR_CLASSES = _env_int("PASSWORD_MIN_CHAR_CLASSES", 2)
+    # 服务端生成的一次性口令长度；仍会被 policy() 派生出的上下界二次钳位，
+    # 故这里写一个荒谬值也不可能生成出违反策略的口令。
+    TEMP_PASSWORD_LENGTH = _env_int("TEMP_PASSWORD_LENGTH", 16)
+    # 追加保留用户名（逗号分隔），与内置表和 ROOT_ADMIN_USERNAME 取并集。
+    # **只作用于「新建账号」那一刻**，不追溯任何存量行：一个叫 system 的既有账号照常工作。
+    RESERVED_USERNAMES = os.environ.get("RESERVED_USERNAMES", "")
+    # 强制改密闸门总开关。置 false **只关硬拦、不关标记**：must_change_password 仍会被
+    # 置位与清除，前端仍会提示。它是「升级当天发现闸门误伤了某个集成脚本」的止血阀，
+    # 不是长期形态（account-security-and-governance §2.2 B-3 第 4 条）。
+    FORCE_PASSWORD_CHANGE = _env_bool("FORCE_PASSWORD_CHANGE", True)
+
     # —— SQLite 落盘同步级别（data-persistence §2.3，评审 P1-3）——
     # 【文档性镜像，不是 PRAGMA 的读取源】PRAGMA 由 extensions.py 的全局 connect
     # 监听器设置，那里没有 Flask 上下文，只能读 os.environ。本字段只服务

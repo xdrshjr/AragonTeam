@@ -16,7 +16,12 @@ import ErrorState from "@/components/ui/ErrorState";
 import EmptyState from "@/components/ui/EmptyState";
 import ConfirmDialog from "@/components/ui/ConfirmDialog";
 import Pagination from "@/components/ui/Pagination";
-import MemberFormModal, { MemberFormState } from "@/components/admin/MemberFormModal";
+import MemberFormModal, {
+  MemberFormState,
+  type TemporaryPasswordResult,
+} from "@/components/admin/MemberFormModal";
+import MemberActivityModal from "@/components/admin/MemberActivityModal";
+import TemporaryPasswordDialog from "@/components/admin/TemporaryPasswordDialog";
 import MemberFilterBar, {
   EMPTY_FILTERS,
   toQuery,
@@ -73,6 +78,9 @@ export default function TeamPage() {
 
   const [editing, setEditing] = useState<MemberFormState | null>(null);
   const [toggling, setToggling] = useState<User | null>(null);
+  // 【account-security-and-governance §6.3】账号动态；【§6.2】一次性口令的唯一一次展示。
+  const [viewingActivity, setViewingActivity] = useState<User | null>(null);
+  const [temporary, setTemporary] = useState<TemporaryPasswordResult | null>(null);
   const hasFilters = useMemo(() => toQuery(filters).length > 0, [filters]);
 
   async function onToggleActive(u: User) {
@@ -141,7 +149,8 @@ export default function TeamPage() {
                         user={u}
                         onEdit={setEditing}
                         onToggle={setToggling}
-                        className="mt-3 justify-start"
+                        onActivity={setViewingActivity}
+                        className="mt-3 flex-wrap justify-start"
                       />
                     )}
                   </li>
@@ -188,7 +197,12 @@ export default function TeamPage() {
                       <td className="px-4 py-3 text-ink">{ROLE_LABELS[u.role]}</td>
                       {isAdmin && (
                         <td className="px-4 py-3">
-                          <RowActions user={u} onEdit={setEditing} onToggle={setToggling} />
+                          <RowActions
+                            user={u}
+                            onEdit={setEditing}
+                            onToggle={setToggling}
+                            onActivity={setViewingActivity}
+                          />
                         </td>
                       )}
                     </tr>
@@ -223,10 +237,20 @@ export default function TeamPage() {
       <MemberFormModal
         state={editing}
         onClose={() => setEditing(null)}
-        onSaved={() => {
+        onSaved={(result) => {
           setEditing(null);
           mutate();
+          // 一次性口令**关掉就再也读不到了**，故先关表单、再把它交给专属对话框。
+          if (result) setTemporary(result);
         }}
+      />
+
+      <MemberActivityModal user={viewingActivity} onClose={() => setViewingActivity(null)} />
+
+      <TemporaryPasswordDialog
+        password={temporary?.password ?? null}
+        memberName={temporary?.memberName ?? ""}
+        onClose={() => setTemporary(null)}
       />
 
       <ConfirmDialog
@@ -261,10 +285,11 @@ export default function TeamPage() {
   );
 }
 
-function RowActions({ user, onEdit, onToggle, className = "justify-end" }: {
+function RowActions({ user, onEdit, onToggle, onActivity, className = "justify-end" }: {
   user: User;
   onEdit: (s: MemberFormState) => void;
   onToggle: (u: User) => void;
+  onActivity: (u: User) => void;
   className?: string;
 }) {
   return (
@@ -282,6 +307,11 @@ function RowActions({ user, onEdit, onToggle, className = "justify-end" }: {
           重置密码
         </Button>
       </span>
+      {/* 「动态」对根管理员**照常可用**——看治理历史不是危险操作，
+          `disabled={user.is_root}` 只作用于「重置密码 / 停用」两项。 */}
+      <Button variant="ghost" size="sm" onClick={() => onActivity(user)}>
+        动态
+      </Button>
       <span title={user.is_root ? ROOT_LOCK_HINT : undefined}>
         <Button
           variant={user.is_active === false ? "ghost" : "danger"}

@@ -14,7 +14,7 @@ from flask import Blueprint, jsonify
 from extensions import db
 from models.app_setting import AppSetting
 from models.user import User
-from services import app_settings
+from services import app_settings, audit
 from services.auth_helpers import current_user, require_root
 from services.validation import json_body, want_bool, want_str
 
@@ -92,6 +92,10 @@ def patch_registration():
 
     actor = current_user()
     app_settings.set_registration_settings(changes, actor.id)
+    # 【account-security-and-governance §2.3 C-3-7】message **只列被改动的键名，绝不带值**——
+    # invite_code 的值是凭据，而审计流的读者面比「只有根管理员能打开的设置页」宽得多。
+    audit.log_settings_event("registration_updated", actor,
+                             message=f"更新了注册配置：{'、'.join(sorted(changes))}")
     db.session.commit()
     return jsonify(_registration_payload()), 200
 
@@ -107,5 +111,6 @@ def rotate_invite_code():
     actor = current_user()
     app_settings.set_registration_settings(
         {"invite_code": app_settings.generate_invite_code()}, actor.id)
+    audit.log_settings_event("invite_code_rotated", actor, message="重新生成了邀请码")
     db.session.commit()
     return jsonify(_registration_payload()), 200
