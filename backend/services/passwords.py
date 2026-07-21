@@ -17,6 +17,7 @@ import secrets
 
 from flask import current_app
 
+from services.config_knobs import clamped_int
 from services.validation import ValidationError
 
 # 输入上限。与 users.password_hash 的列宽无关，纯粹是防超长哈希开销；
@@ -52,45 +53,25 @@ _GENERATOR_CLASSES = (_UPPER, _LOWER, _DIGIT, _SYMBOL)
 _TEMP_PASSWORD_HARD_CAP = 64
 
 
-def _clamped_config_int(key: str, default: int, low: int, high: int) -> int:
-    """读一个整数旋钮并钳到 [low, high]；脏值回落默认 + warning，**不抛异常**。
-
-    与 `services/app_settings.py` 的「脏值一律回落 + warning」同一取向：口令策略
-    配置写错了不该让整个登录体系 500。
-
-    Args:
-        key: config 键名。
-        default: 缺省 / 脏值时的回落值。
-        low: 钳位下界（含）。
-        high: 钳位上界（含）。
-
-    Returns:
-        钳位后的整数。
-    """
-    raw = current_app.config.get(key, default)
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        current_app.logger.warning(
-            "passwords: unparsable %s=%r, falling back to %s", key, raw, default)
-        value = default
-    return max(low, min(value, high))
-
-
 def policy() -> dict:
     """当前生效的口令策略。**唯一**读取配置的地方。
+
+    钳位实现已提升为 `services/config_knobs.py::clamped_int`（第二个调用点
+    `services/login_guard.py` 出现即抽取，login-hardening-and-audit-console §1.2 B-2）。
+    `source="passwords"` 让 warning 的输出**逐字节不变**——`tests/test_password_policy.py`
+    的 16 条用例因此仍是这次搬迁的回归证据。
 
     Returns:
         `{"min_length": int, "max_length": int, "min_char_classes": int}`。
     """
     return {
-        "min_length": _clamped_config_int(
+        "min_length": clamped_int(
             "PASSWORD_MIN_LENGTH", DEFAULT_MIN_LENGTH,
-            _MIN_LENGTH_FLOOR, PASSWORD_MAX_LENGTH),
+            _MIN_LENGTH_FLOOR, PASSWORD_MAX_LENGTH, source="passwords"),
         "max_length": PASSWORD_MAX_LENGTH,
-        "min_char_classes": _clamped_config_int(
+        "min_char_classes": clamped_int(
             "PASSWORD_MIN_CHAR_CLASSES", DEFAULT_MIN_CHAR_CLASSES,
-            _CHAR_CLASSES_FLOOR, _CHAR_CLASSES_CEIL),
+            _CHAR_CLASSES_FLOOR, _CHAR_CLASSES_CEIL, source="passwords"),
     }
 
 

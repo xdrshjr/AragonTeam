@@ -32,6 +32,12 @@ ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     # account-security-and-governance §5.1：强制改密标记。存量行零回填即语义正确——
     # 他们的口令确实是自己在用的那个，不该被闸门拦住。
     ("users", "must_change_password", "BOOLEAN NOT NULL DEFAULT 0"),
+    # login-hardening-and-audit-console §1.2 B-1：登录闸门三列。存量行零回填即语义正确
+    # （从未登录 / 零失败 / 未锁定）。**必须追加在列表末尾**：sync_additive_columns 按
+    # 列表顺序返回 applied，tests/test_schema_sync.py:57 断言的是那个列表的精确顺序。
+    ("users", "last_login_at", "DATETIME"),
+    ("users", "failed_login_count", "INTEGER NOT NULL DEFAULT 0"),
+    ("users", "locked_until", "DATETIME"),
 ]
 
 

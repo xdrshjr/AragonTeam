@@ -51,13 +51,17 @@ def test_adds_missing_column_to_existing_table(legacy_db):
 
     applied = schema_sync.sync_additive_columns(engine)
 
-    # 这份存量库缺 users 表的**全部** additive 列，故四条都应被补上
+    # 这份存量库缺 users 表的**全部** additive 列，故都应被补上
     # （self-service-registration §5.2 新增 is_root / source；
-    #  account-security-and-governance §5.1 新增 must_change_password）。
+    #  account-security-and-governance §5.1 新增 must_change_password；
+    #  login-hardening-and-audit-console §1.2 B-1 新增 last_login_at /
+    #  failed_login_count / locked_until，追加在列表末尾故排在最后三位）。
     assert applied == ["users.is_active", "users.is_root", "users.source",
-                       "users.must_change_password"]
+                       "users.must_change_password", "users.last_login_at",
+                       "users.failed_login_count", "users.locked_until"]
     # `applied` 只是返回值；这一行才验证 DDL 真的落到了库上，故新列必须同时登记两处。
-    assert {"is_active", "is_root", "source", "must_change_password"} \
+    assert {"is_active", "is_root", "source", "must_change_password",
+            "last_login_at", "failed_login_count", "locked_until"} \
         <= _columns(engine, "users")
 
 

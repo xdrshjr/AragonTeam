@@ -10,6 +10,8 @@
 契约：`?project_id=` 缺省 / 空串 = 不过滤；整数 = 该项目；字面量 `none` = 未归属
 （`project_id IS NULL`）；其余取值（含超界整数）= 400（沿用前两轮「坏输入一律 400」的既定契约）。
 """
+from datetime import datetime
+
 from flask import request, jsonify
 
 UNASSIGNED = "none"
@@ -131,6 +133,37 @@ def want_query_bool(field: str, *, default=None):
     if value in _FALSE_LITERALS:
         return False
     raise QueryParamError(field, raw, "one of ['0', '1', 'false', 'true']")
+
+
+def want_query_datetime(field: str, *, default=None):
+    """从查询串取一个 ISO 8601 时刻；缺省 / 空串返回 default，非法抛 QueryParamError（→ 400）。
+
+    【login-hardening-and-audit-console §2.3 / 评审 P0-3】这是查询串侧的**第四个**原语——
+    此前只有 int / str / bool，而 `?since=` 无 datetime 原语不可实现。
+
+    容忍尾部 `Z`：本站的 `to_dict` 输出恒补 Z（`models/user.py:92`），界面上看到的值原样
+    提交回来必须能被接住，否则就是「显示的值提交回来就 400」这种自相矛盾（同 R-14）。
+    返回 **naive UTC**，与 `extensions.utcnow()` 同一口径。
+
+    Args:
+        field: 查询串参数名（同时用作错误体的 detail.field）。
+        default: 参数缺省 / 空串时的返回值。
+
+    Returns:
+        `datetime` 或 default。
+
+    Raises:
+        QueryParamError: 非 ISO 8601 datetime（**三参位置调用**，缺 got 会 TypeError→500）。
+    """
+    raw = request.args.get(field)
+    if raw is None or raw.strip() == "":
+        return default
+    value = raw.strip()
+    try:
+        # 只削一个尾字符（rstrip("Z") 会把 "...ZZZ" 也吃掉，虽无害但不诚实）。
+        return datetime.fromisoformat(value[:-1] if value.endswith("Z") else value)
+    except ValueError:
+        raise QueryParamError(field, raw, "ISO 8601 datetime")
 
 
 def project_scope():

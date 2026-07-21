@@ -23,8 +23,12 @@ def test_defaults_when_no_row(app):
     with app.app_context():
         assert AppSetting.query.count() == 0
 
+        # 【login-hardening-and-audit-console 评审 P0-1】get_registration_settings() 由
+        # 3 键扩为 5 键：check_invite_code 从它读期限与额度。全新库上的缺省即
+        # 「永不过期、不限量」，与 §1.1 A-1 的缺省表一致。
         assert app_settings.get_registration_settings() == {
             "enabled": True, "invite_code": "aragon", "default_role": "member",
+            "invite_expires_at": None, "invite_max_uses": 0,
         }
 
 

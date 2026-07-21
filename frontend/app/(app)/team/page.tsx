@@ -8,6 +8,7 @@ import { useToast } from "@/lib/toast";
 import { invalidateAdminViews } from "@/lib/swr-keys";
 import type { User } from "@/lib/types";
 import { ROLE_LABELS } from "@/lib/constants";
+import { relTime } from "@/lib/format";
 import Header from "@/components/layout/Header";
 import Button from "@/components/ui/Button";
 import Avatar from "@/components/ui/Avatar";
@@ -51,6 +52,27 @@ function SourceBadge({ source }: { source: User["source"] }) {
   );
 }
 
+/** 单行的状态徽章：视觉权重 已停用 > 已锁定 > 自助注册，一行至多一个（root 徽章另计）。
+ *  锁定 + 停用同时成立时只显示「已停用」——停用是更强的状态，锁定在它面前没有信息量。 */
+function StatusBadge({ user }: { user: User }) {
+  if (user.is_active === false) {
+    return (
+      <span className="rounded-md border border-border px-1.5 py-0.5 text-xs font-normal text-ink-muted">
+        已停用
+      </span>
+    );
+  }
+  if (user.is_locked) {
+    return (
+      <span className="rounded-md bg-[#F3D2C7] px-1.5 py-0.5 text-xs font-medium text-[#A03518]">
+        已锁定
+      </span>
+    );
+  }
+  if (!user.is_root) return <SourceBadge source={user.source} />;
+  return null;
+}
+
 export default function TeamPage() {
   const { user: me } = useAuth();
   const toast = useToast();
@@ -78,6 +100,8 @@ export default function TeamPage() {
 
   const [editing, setEditing] = useState<MemberFormState | null>(null);
   const [toggling, setToggling] = useState<User | null>(null);
+  // 【login-hardening-and-audit-console §5.2】解锁确认。
+  const [unlocking, setUnlocking] = useState<User | null>(null);
   // 【account-security-and-governance §6.3】账号动态；【§6.2】一次性口令的唯一一次展示。
   const [viewingActivity, setViewingActivity] = useState<User | null>(null);
   const [temporary, setTemporary] = useState<TemporaryPasswordResult | null>(null);
@@ -86,6 +110,13 @@ export default function TeamPage() {
   async function onToggleActive(u: User) {
     await api.patch<User>(`/users/${u.id}`, { is_active: !u.is_active });
     toast.success(u.is_active ? "成员已停用" : "成员已启用");
+    mutate();
+    invalidateAdminViews(globalMutate);
+  }
+
+  async function onUnlock(u: User) {
+    await api.post<{ user: User; unlocked: boolean }>(`/users/${u.id}/unlock`, {});
+    toast.success("已解除登录锁定");
     mutate();
     invalidateAdminViews(globalMutate);
   }
@@ -133,16 +164,14 @@ export default function TeamPage() {
                       <Avatar name={u.display_name || u.username} color={u.avatar_color} size={28} />
                       <span className="font-medium text-ink">{u.display_name || u.username}</span>
                       {u.is_root && <RootBadge />}
-                      {u.is_active === false && (
-                        <span className="rounded-md border border-border px-1.5 py-0.5 text-xs text-ink-muted">
-                          已停用
-                        </span>
-                      )}
-                      {!u.is_root && u.is_active !== false && <SourceBadge source={u.source} />}
+                      <StatusBadge user={u} />
                     </div>
                     <div className="mt-1 text-xs text-ink-muted">
                       {u.username} · {ROLE_LABELS[u.role]}
                       {u.email ? ` · ${u.email}` : ""}
+                    </div>
+                    <div className="mt-0.5 text-xs text-ink-muted/80">
+                      最后登录：{u.last_login_at ? relTime(u.last_login_at) : "—"}
                     </div>
                     {isAdmin && (
                       <RowActions
@@ -150,6 +179,7 @@ export default function TeamPage() {
                         onEdit={setEditing}
                         onToggle={setToggling}
                         onActivity={setViewingActivity}
+                        onUnlock={setUnlocking}
                         className="mt-3 flex-wrap justify-start"
                       />
                     )}
@@ -164,6 +194,7 @@ export default function TeamPage() {
                     <th className="px-4 py-3 font-medium">用户名</th>
                     <th className="px-4 py-3 font-medium">邮箱</th>
                     <th className="px-4 py-3 font-medium">角色</th>
+                    <th className="px-4 py-3 font-medium">最后登录</th>
                     {isAdmin && <th className="px-4 py-3 font-medium text-right">操作</th>}
                   </tr>
                 </thead>
@@ -182,19 +213,17 @@ export default function TeamPage() {
                           <span className="font-medium text-ink">
                             {u.display_name || u.username}
                           </span>
-                          {/* 视觉权重依次递减：根管理员 > 已停用 > 自助注册；一行最多两个。 */}
+                          {/* 视觉权重依次递减：根管理员 > 已停用 > 已锁定 > 自助注册；一行最多两个。 */}
                           {u.is_root && <RootBadge />}
-                          {u.is_active === false && (
-                            <span className="rounded-md border border-border px-1.5 py-0.5 text-xs font-normal text-ink-muted">
-                              已停用
-                            </span>
-                          )}
-                          {!u.is_root && u.is_active !== false && <SourceBadge source={u.source} />}
+                          <StatusBadge user={u} />
                         </div>
                       </td>
                       <td className="px-4 py-3 text-ink-muted">{u.username}</td>
                       <td className="px-4 py-3 text-ink-muted">{u.email || "—"}</td>
                       <td className="px-4 py-3 text-ink">{ROLE_LABELS[u.role]}</td>
+                      <td className="px-4 py-3 text-ink-muted">
+                        {u.last_login_at ? relTime(u.last_login_at) : "—"}
+                      </td>
                       {isAdmin && (
                         <td className="px-4 py-3">
                           <RowActions
@@ -202,6 +231,7 @@ export default function TeamPage() {
                             onEdit={setEditing}
                             onToggle={setToggling}
                             onActivity={setViewingActivity}
+                            onUnlock={setUnlocking}
                           />
                         </td>
                       )}
@@ -281,15 +311,34 @@ export default function TeamPage() {
         onConfirm={() => onToggleActive(toggling as User)}
         onClose={() => setToggling(null)}
       />
+
+      <ConfirmDialog
+        open={!!unlocking}
+        title="解除登录锁定"
+        confirmLabel="确认解锁"
+        description={
+          <>
+            「{unlocking?.display_name || unlocking?.username}」将
+            <strong className="text-ink">立即可以重新尝试登录</strong>，失败计数归零。
+            <br />
+            <span className="text-ink-muted">
+              解锁<strong className="text-ink">不会改变密码</strong>——如果他忘了密码，请改用「重置密码」。
+            </span>
+          </>
+        }
+        onConfirm={() => onUnlock(unlocking as User)}
+        onClose={() => setUnlocking(null)}
+      />
     </>
   );
 }
 
-function RowActions({ user, onEdit, onToggle, onActivity, className = "justify-end" }: {
+function RowActions({ user, onEdit, onToggle, onActivity, onUnlock, className = "justify-end" }: {
   user: User;
   onEdit: (s: MemberFormState) => void;
   onToggle: (u: User) => void;
   onActivity: (u: User) => void;
+  onUnlock: (u: User) => void;
   className?: string;
 }) {
   return (
@@ -307,6 +356,14 @@ function RowActions({ user, onEdit, onToggle, onActivity, className = "justify-e
           重置密码
         </Button>
       </span>
+      {/* 「解锁」**仅当这一行确实被锁时才渲染**（不是 disabled）：解锁与「重置密码 / 停用」
+          有意不同——那两个是「有这个能力但对这一行不适用」（disabled + title），而解锁是
+          「这一行现在没有可解的东西」，渲染一个恒灰的按钮只是噪音。 */}
+      {user.is_locked && (
+        <Button variant="ghost" size="sm" onClick={() => onUnlock(user)}>
+          解锁
+        </Button>
+      )}
       {/* 「动态」对根管理员**照常可用**——看治理历史不是危险操作，
           `disabled={user.is_root}` 只作用于「重置密码 / 停用」两项。 */}
       <Button variant="ghost" size="sm" onClick={() => onActivity(user)}>

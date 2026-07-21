@@ -16,6 +16,25 @@ import AuthSplitLayout from "@/components/auth/AuthSplitLayout";
 // 本轮随自助注册一并删除。信息本身没有丢失：默认账号来自后端配置 `ROOT_ADMIN_*`，
 // README 的「快速开始」写明了开发默认值。
 
+/** 把登录错误映射成给人看的中文（login-hardening-and-audit-console §5.4）。
+ *  锁定态 403 必须区别于停用态 403：前者可自愈、有明确等待时长。
+ *  `retry_after_seconds` 缺失时降级为不带时长的句子——**绝不显示「NaN 分钟」**。 */
+function loginErrorMessage(err: unknown): string {
+  if (!(err instanceof ApiError)) return "登录失败";
+  if (err.status === 403 && err.message === "account is temporarily locked") {
+    const secs = (err.detail as { retry_after_seconds?: number } | undefined)
+      ?.retry_after_seconds;
+    const mins = typeof secs === "number" && secs > 0 ? Math.ceil(secs / 60) : null;
+    return mins
+      ? `登录尝试过于频繁，账号已临时锁定，请在 ${mins} 分钟后重试，或联系管理员解锁。`
+      : "登录尝试过于频繁，账号已临时锁定，请稍后重试，或联系管理员解锁。";
+  }
+  if (err.status === 403 && err.message === "account is disabled, contact an administrator") {
+    return "账号已被停用，请联系管理员。";
+  }
+  return err.message;
+}
+
 export default function LoginPage() {
   const router = useRouter();
   const { login, user, loading } = useAuth();
@@ -42,8 +61,7 @@ export default function LoginPage() {
       toast.success("登录成功");
       router.replace("/dashboard");
     } catch (err) {
-      const msg = err instanceof ApiError ? err.message : "登录失败";
-      toast.error(msg);
+      toast.error(loginErrorMessage(err));
     } finally {
       setSubmitting(false);
     }

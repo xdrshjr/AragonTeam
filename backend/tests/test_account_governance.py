@@ -16,6 +16,7 @@ import pytest
 from extensions import db
 from models.activity import Activity
 from models.user import User
+from services import audit
 from services.auth_helpers import _PASSWORD_GATE_EXEMPT
 from tools import purge_demo_data as purge
 
@@ -505,3 +506,155 @@ def test_weak_root_admin_password_does_not_break_boot(file_app):
 
     assert r.status_code == 200, r.get_json()
     assert r.get_json()["user"]["must_change_password"] is False
+
+
+# ————————————————————— E. 站点治理审计出口 54–63/60′
+# （login-hardening-and-audit-console §7.2 E 组）—————————————————————
+
+def _audit(client, root_auth, qs=""):
+    return client.get(f"/api/settings/audit{qs}", headers=root_auth)
+
+
+def test_audit_root_returns_bare_array_with_total(client, root_auth):
+    client.post("/api/settings/registration/rotate-code", headers=root_auth)
+    r = _audit(client, root_auth)
+    assert r.status_code == 200
+    assert isinstance(r.get_json(), list)
+    assert "X-Total-Count" in r.headers
+
+
+def test_audit_forbidden_for_normal_admin(client, auth):
+    """R-10：普通 admin（非 root）→ 403。"""
+    assert _audit(client, auth("admin")).status_code == 403
+
+
+def test_audit_defaults_to_both_entity_types(client, root_auth, data):
+    client.patch(f"/api/users/{data['member_id']}", json={"role": "pm"}, headers=root_auth)
+    client.patch("/api/settings/registration", json={"enabled": True}, headers=root_auth)
+    rows = _audit(client, root_auth).get_json()
+    kinds = {row["entity_type"] for row in rows}
+    assert "user" in kinds
+    assert "app_setting" in kinds
+
+
+def test_audit_filter_app_setting_reads_rotate(client, root_auth):
+    client.post("/api/settings/registration/rotate-code", headers=root_auth)
+    rows = _audit(client, root_auth, "?entity_type=app_setting").get_json()
+    assert rows
+    assert all(row["entity_type"] == "app_setting" for row in rows)
+    assert any(row["action"] == "invite_code_rotated" for row in rows)
+
+
+def test_audit_filter_by_action(client, root_auth, data):
+    client.patch(f"/api/users/{data['member_id']}", json={"role": "pm"}, headers=root_auth)
+    rows = _audit(client, root_auth, "?action=role_changed").get_json()
+    assert rows and all(row["action"] == "role_changed" for row in rows)
+    assert _audit(client, root_auth, "?action=not-a-real-action").status_code == 400
+
+
+def test_audit_filter_by_actor_and_since(client, root_auth, data):
+    client.patch(f"/api/users/{data['member_id']}", json={"role": "pm"}, headers=root_auth)
+    by_actor = _audit(client, root_auth, f"?actor_id={data['admin_id']}").get_json()
+    assert by_actor and all(row["actor_id"] == data["admin_id"] for row in by_actor)
+    # since 取一个未来时刻 → 空。
+    future = "2999-01-01T00:00:00"
+    assert _audit(client, root_auth, f"?since={future}").get_json() == []
+
+
+def test_audit_since_garbage_is_400_not_500(client, root_auth):
+    """60【评审 P0-3】?since=乱码 → 400（不是 500），detail.field/expected 就位。"""
+    r = _audit(client, root_auth, "?since=not-a-date")
+    assert r.status_code == 400
+    detail = r.get_json()["detail"]
+    assert detail["field"] == "since"
+    assert detail["expected"] == "ISO 8601 datetime"
+
+
+def test_audit_since_tolerates_trailing_z(client, root_auth, data):
+    """60′：把响应里带 Z 的 created_at 原样贴回 ?since= → 200 且过滤生效。"""
+    client.patch(f"/api/users/{data['member_id']}", json={"role": "pm"}, headers=root_auth)
+    rows = _audit(client, root_auth).get_json()
+    stamp = rows[0]["created_at"]                    # 形如 "...Z"
+    assert stamp.endswith("Z")
+    r = _audit(client, root_auth, f"?since={stamp}")
+    assert r.status_code == 200
+
+
+def test_audit_rows_carry_actor_and_target_blocks(client, app, root_auth, data):
+    client.patch(f"/api/users/{data['member_id']}", json={"role": "pm"}, headers=root_auth)
+    with app.app_context():
+        # 一条 system 施动的锁定审计：actor 应为 null。
+        member = db.session.get(User, data["member_id"])
+        audit.log_user_event(member, "account_locked", None, to_value="locked",
+                             message="连续失败被锁定")
+        db.session.commit()
+    rows = _audit(client, root_auth).get_json()
+    role_row = next(r for r in rows if r["action"] == "role_changed")
+    assert role_row["actor"]["id"] == data["admin_id"]
+    assert role_row["target"]["id"] == data["member_id"]
+    locked_row = next(r for r in rows if r["action"] == "account_locked")
+    assert locked_row["actor"] is None               # system 事件
+    settings_rows = [r for r in rows if r["entity_type"] == "app_setting"]
+    for r in settings_rows:
+        assert r["target"] is None                   # app_setting 单例无目标
+
+
+def test_audit_renders_after_actor_deleted(client, app, root_auth):
+    with app.app_context():
+        ghost = User(username="ghostactor", role="admin", is_active=True)
+        ghost.set_password("Aragon2026")
+        db.session.add(ghost)
+        db.session.flush()
+        target = User(username="ghosttarget", role="member")
+        target.set_password("Aragon2026")
+        db.session.add(target)
+        db.session.flush()
+        audit.log_user_event(target, "role_changed", ghost, from_value="member",
+                             to_value="pm", message="改角色")
+        db.session.commit()
+        db.session.delete(ghost)                     # 施动者被删
+        db.session.commit()
+    r = _audit(client, root_auth)
+    assert r.status_code == 200                       # 不抛
+    row = next(x for x in r.get_json() if x["action"] == "role_changed"
+               and x.get("target") and x["target"]["name"] == "ghosttarget")
+    assert row["actor"] is None                       # 降级为 null
+
+
+def test_audit_page_resolves_actors_without_n_plus_one(client, app, root_auth, data):
+    """63（R-9）：一页 50 行审计对 users 表的查询次数不随行数增长。"""
+    from sqlalchemy import event
+
+    with app.app_context():
+        actors = []
+        for i in range(5):
+            u = User(username=f"actor{i}", role="admin")
+            u.set_password("Aragon2026")
+            db.session.add(u)
+            actors.append(u)
+        target = db.session.get(User, data["member_id"])
+        db.session.flush()
+        for i in range(50):
+            audit.log_user_event(target, "role_changed", actors[i % 5],
+                                 from_value="member", to_value="pm", message="x")
+        db.session.commit()
+
+    counts = {"users": 0, "batched": 0}
+
+    def _before(conn, cursor, statement, parameters, context, executemany):
+        if "FROM users" in statement:
+            counts["users"] += 1
+            if " IN (" in statement:
+                counts["batched"] += 1
+
+    engine = db.engine
+    event.listen(engine, "before_cursor_execute", _before)
+    try:
+        r = client.get("/api/settings/audit?limit=50", headers=root_auth)
+    finally:
+        event.remove(engine, "before_cursor_execute", _before)
+    assert r.status_code == 200
+    # resolve_actors 必须**恰好一次**批量 IN 查询（不是逐行 get）。
+    assert counts["batched"] == 1
+    # 其余是 auth / loader 的常量次数；关键是总数不随行数增长。真正的 N+1 会是 ~50 次。
+    assert counts["users"] < 10

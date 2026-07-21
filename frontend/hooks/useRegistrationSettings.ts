@@ -5,11 +5,16 @@ import { useCallback } from "react";
 import { api, swrFetcher, REGISTRATION_SETTINGS_KEY } from "@/lib/api";
 import type { RegistrationSettings } from "@/lib/types";
 
-/** PATCH 的部分更新载荷；三个键均可选，一个都不带后端返 400。 */
+/** PATCH 的部分更新载荷；键均可选，一个都不带后端返 400。 */
 export interface RegistrationSettingsPatch {
   enabled?: boolean;
   invite_code?: string;
   default_role?: RegistrationSettings["default_role"];
+  // login-hardening-and-audit-console §3.4：邀请码期限 + 额度（additive）。
+  /** 失效时刻的 ISO 串；null 或 "" = 清除（永不过期）。 */
+  expires_at?: string | null;
+  /** 名额上限；0 = 不限。**必须传数字**（后端 want_int 拒收数字串）。 */
+  max_uses?: number;
 }
 
 /**

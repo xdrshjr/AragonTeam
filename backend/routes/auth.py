@@ -21,7 +21,8 @@ from extensions import db
 from models.user import User
 from services.auth_helpers import current_user, require_role
 from services import (
-    accounts, app_settings, audit, avatars, notifications, passwords, ratelimit,
+    accounts, app_settings, audit, avatars, login_guard, notifications, passwords,
+    ratelimit,
 )
 from services.validation import json_body, want_email, want_str
 
@@ -47,9 +48,22 @@ def login():
         return jsonify({"error": "too many attempts, try later"}), 429
 
     user = User.query.filter_by(username=username).first()
+    # 【login-hardening-and-audit-console §1.2 B-4 第 3 步】口令错 → **永远** 401，
+    # 并在账号存在时记一次失败登录（可能触发锁定）。副作用是本轮唯一新增的匿名可触发
+    # DB 写：IP 限流先于它、已锁定即短路、只 UPDATE 一行（风险表 R-3）。
     if user is None or not user.check_password(password):
         ratelimit.record_failure(key)
+        if user is not None:
+            login_guard.note_failed_login(user)
+            db.session.commit()
         return jsonify({"error": "invalid username or password"}), 401
+
+    # 【§1.2 B-4 第 4 步】锁定检查**排在口令校验之后**：口令错永远只见 401（锁不锁一样），
+    # 只有口令对了才可能看到 403 —— 否则 403 就成了「这个用户名存在且被我打锁了」的
+    # 用户枚举预言机（风险表 R-1）。持码人本就知道口令，告诉他「临时锁定，还有 12 分钟」
+    # 是他唯一能据以行动的信息；锁定仍然拦住他，这才是重点。
+    if login_guard.is_locked(user):
+        return login_guard.locked_response(user)
 
     # 【lifecycle-and-governance §2.5】账号已停用 → 403，与「密码错误」明确区分：
     # 这是管理动作，用户需要知道去找谁。**不计入限流失败**（不是猜密码），也不多泄露信息。
@@ -58,6 +72,9 @@ def login():
         return jsonify({"error": "account is disabled, contact an administrator"}), 403
 
     ratelimit.clear(key)  # 成功清零，避免误伤后续正常登录。
+    # 【§1.2 B-4 第 6 步】成功：写 last_login_at、清零失败计数与锁（响应体逐字不变）。
+    login_guard.note_successful_login(user)
+    db.session.commit()
     return jsonify({"token": _issue_token(user), "user": user.to_dict()}), 200
 
 
@@ -137,9 +154,16 @@ def signup():
     settings = app_settings.get_registration_settings()
     if not settings["enabled"]:
         return jsonify({"error": "registration is disabled"}), 403
-    if not app_settings.verify_invite_code(invite_code):
-        return jsonify({"error": "invalid invite code",
-                        "detail": {"field": "invite_code"}}), 403
+    # 【login-hardening-and-audit-console §1.1 A-4 / §2.5】按 reason 分流：mismatch 沿用既有
+    # `invalid invite code`（§10.6 不可变错误串），expired / exhausted 是本轮新增的两个串。
+    # 判定顺序在服务层保证不泄露过期/用尽事实给不持码人。
+    check = app_settings.check_invite_code(invite_code)
+    if not check.ok:
+        error = {
+            "expired": "invite code has expired",
+            "exhausted": "invite code has reached its limit",
+        }.get(check.reason, "invalid invite code")
+        return jsonify({"error": error, "detail": {"field": "invite_code"}}), 403
 
     # 5 口令强度（不满足即抛 ValidationError → 400）。
     passwords.validate_signup_password(password, username)

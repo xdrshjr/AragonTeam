@@ -14,6 +14,7 @@
 import type { User, UserActivity } from "@/lib/types";
 import { useUserActivities } from "@/hooks/useUserActivities";
 import { ROLE_LABELS, userActivityIcon, userActivityLabel } from "@/lib/constants";
+import { relTime } from "@/lib/format";
 import Modal from "@/components/ui/Modal";
 import EmptyState from "@/components/ui/EmptyState";
 import ErrorState from "@/components/ui/ErrorState";
@@ -23,21 +24,6 @@ interface Props {
   /** null → 关闭。 */
   user: User | null;
   onClose: () => void;
-}
-
-// 相对时间（created_at 带 Z，正确解析为本地时间）。形状与 NotificationBell 的同名函数一致。
-function relTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const diff = Date.now() - d.getTime();
-  const m = Math.floor(diff / 60000);
-  if (m < 1) return "刚刚";
-  if (m < 60) return `${m} 分钟前`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h} 小时前`;
-  const day = Math.floor(h / 24);
-  if (day < 30) return `${day} 天前`;
-  return d.toLocaleDateString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" });
 }
 
 /** 角色迁移用中文呈现；`active`/`disabled` 这类非角色取值原样回显。 */

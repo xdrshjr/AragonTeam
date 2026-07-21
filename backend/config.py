@@ -48,6 +48,19 @@ class Config:
     # —— 登录限流阈值（§2.5-4）——
     LOGIN_MAX_ATTEMPTS = _env_int("LOGIN_MAX_ATTEMPTS", 10)
 
+    # —— 账号级登录锁定（login-hardening-and-audit-console §1.2）——
+    # 与 LOGIN_MAX_ATTEMPTS（内存 IP 限流）是**两道正交的闸**：前者按 (ip, username) 计、
+    # 重启即失忆；本组按**账号**计、落库、跨重启有效。慢速分布式撞库只有后者挡得住。
+    # 取值经 services/login_guard.py::lock_policy() 钳到 [3,100] / [1,1440] / [0,10080]，
+    # 脏值回落默认 + warning，绝不 500。
+    # 【隐式关系，见 README】LOGIN_LOCK_THRESHOLD >= LOGIN_MAX_ATTEMPTS 时账号锁定在该部署下
+    # **永远不可能触发**（IP 限流先把请求挡光）。默认 8 < 10 是刻意的。
+    LOGIN_LOCK_THRESHOLD = _env_int("LOGIN_LOCK_THRESHOLD", 8)
+    LOGIN_LOCK_MINUTES = _env_int("LOGIN_LOCK_MINUTES", 15)
+    # 同一账号在此窗口内已记过 account_locked 审计则只写审计、不再扇出通知（评审 P1-3）。
+    # 0 = 每次锁定都通知。防的是「换 IP 反复触发自然到期后再锁」造成的管理员通知放大。
+    LOGIN_LOCK_NOTIFY_COOLDOWN_MINUTES = _env_int("LOGIN_LOCK_NOTIFY_COOLDOWN_MINUTES", 1440)
+
     # —— 启动时是否 seed（测试关闭并自建 fixture，§2.5-5）——
     SEED_ON_STARTUP = _env_bool("SEED_ON_STARTUP", True)
 
@@ -177,6 +190,13 @@ class TestConfig(Config):
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(minutes=30)
     # 阈值调小以便快测 429（【R-03】计数随 app 实例重建，见 services/ratelimit.py）。
     LOGIN_MAX_ATTEMPTS = 3
+    # 【login-hardening-and-audit-console 评审 P0-2】= 钳位下界 = LOGIN_MAX_ATTEMPTS。
+    # 三者相等不是巧合：IP 限流从第 4 次请求起恒 429，故第 3 次失败必须正好触发账号锁定，
+    # 才能让 test_login_guard 的用例在跨过第 3 次前 ratelimit.reset() 后观测到 403。
+    # 取 2（v1 的死值）会让 test_auth.py:52-60（对 pm 连错 2 次后正确口令断言 200）翻红。
+    LOGIN_LOCK_THRESHOLD = 3
+    LOGIN_LOCK_MINUTES = 15
+    LOGIN_LOCK_NOTIFY_COOLDOWN_MINUTES = 1440
     # 【ticket-document-management §5.3】上限调到 1 MB，让 413 用例只需造 1 MB 数据。
     # MAX_CONTENT_LENGTH 是**派生值**，父类在类体里求值一次，必须在这里一并覆盖。
     MAX_UPLOAD_MB = 1

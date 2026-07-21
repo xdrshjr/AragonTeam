@@ -11,6 +11,7 @@
 约定），由调用方事务统一提交。
 """
 from models.activity import Activity, APP_SETTING_ENTITY_ID
+from models.user import User
 
 ENTITY_USER = "user"
 ENTITY_APP_SETTING = "app_setting"
@@ -23,9 +24,18 @@ USER_ACTIONS = (
     "deactivated",
     "password_reset",     # 他人重置（含一次性口令）
     "password_changed",   # 本人自助改密
+    # 【login-hardening-and-audit-console §1.3 C-4-1】登录闸门两个 system/admin 动作。
+    # 前端 lib/types.ts 的 UserActivityAction 与 lib/constants.ts 的两个
+    # Record<UserActivityAction, string> map 是它的镜像，漏改任一处即 npm run typecheck 报错。
+    "account_locked",     # 连续失败触发锁定（actor=system）
+    "account_unlocked",   # 管理员显式解锁
 )
 
 SETTINGS_ACTIONS = ("registration_updated", "invite_code_rotated")
+
+# 【login-hardening-and-audit-console §1.3 C-1】站点级治理审计的实体维度与动作全集。
+GOVERNANCE_ENTITY_TYPES = (ENTITY_USER, ENTITY_APP_SETTING)
+ALL_ACTIONS = USER_ACTIONS + SETTINGS_ACTIONS      # 供路由做 ?action= 的 choices 校验
 
 # 审计 message 是给人读的，角色代号不是。**唯一一份**中文角色词典：
 # 前端另有一份（lib/constants.ts），两侧都只是展示，不参与任何判定。
@@ -90,3 +100,52 @@ def user_timeline(user_id: int):
     """
     return Activity.query.filter_by(entity_type=ENTITY_USER, entity_id=user_id)\
         .order_by(Activity.created_at.desc(), Activity.id.desc())
+
+
+def governance_timeline(*, entity_type=None, action=None, actor_id=None, since=None):
+    """站点级治理审计查询（**未分页**，供路由套 paginate；login-hardening §1.3 C-1）。
+
+    与 `user_timeline` 并列：那个回答「这个人身上发生过什么」，本函数回答
+    「这个站点上发生过什么」。`entity_type` 默认取**两者**是关键——`app_setting` 事件
+    今天写了读不到，本轮的第一目的就是让它可读，写成默认只查 user 等于把缺陷带进新端点。
+
+    Args:
+        entity_type: 限定 `user` / `app_setting`；None = 两者。
+        action: 限定单个 action；None = 不过滤（取值合法性由路由的 choices 保证）。
+        actor_id: 限定施动者（仅 actor_type == "user" 的行）；None = 不过滤。
+        since: 只取此时刻及之后（naive UTC）；None = 不过滤。
+
+    Returns:
+        按时间倒序的 Activity 查询对象。
+    """
+    q = Activity.query.filter(Activity.entity_type.in_(
+        (entity_type,) if entity_type else GOVERNANCE_ENTITY_TYPES))
+    if action is not None:
+        q = q.filter(Activity.action == action)
+    if actor_id is not None:
+        q = q.filter(Activity.actor_type == "user", Activity.actor_id == actor_id)
+    if since is not None:
+        q = q.filter(Activity.created_at >= since)
+    return q.order_by(Activity.created_at.desc(), Activity.id.desc())
+
+
+def resolve_actors(rows) -> dict:
+    """把一页审计行里出现的所有 user id 一次性解析成 `{id: {"id":.., "name":..}}`。
+
+    需要解析的 id 有两个来源：施动者（`actor_type == "user"` 的 actor_id）与被治理对象
+    （`entity_type == "user"` 的 entity_id）。合成一个集合、发**一次** `IN` 查询——逐行
+    `db.session.get` 在 50 行的默认页宽下就是 100 次往返（§1.3 C-2 / §7 R-9）。
+
+    解析不到的 id 不入结果 dict，调用方据此降级为 null——`activities` 没有 DB 外键，
+    被删的用户必须能安全渲染成占位。
+    """
+    ids = set()
+    for row in rows:
+        if row.actor_type == "user" and row.actor_id is not None:
+            ids.add(row.actor_id)
+        if row.entity_type == ENTITY_USER:
+            ids.add(row.entity_id)
+    if not ids:
+        return {}
+    users = User.query.filter(User.id.in_(ids)).all()
+    return {u.id: {"id": u.id, "name": u.display_name or u.username} for u in users}

@@ -7,24 +7,10 @@ import { useNotifications } from "@/hooks/useNotifications";
 import { ApiError } from "@/lib/api";
 import { useToast } from "@/lib/toast";
 import { notificationIcon, notificationLabel } from "@/lib/constants";
+import { relTime } from "@/lib/format";
 import type { Notification } from "@/lib/types";
 import { AuthorAvatar } from "@/components/ui/Avatar";
 import ErrorState from "@/components/ui/ErrorState";
-
-// 相对时间（created_at 带 Z，正确解析为本地时间）。
-function relTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const diff = Date.now() - d.getTime();
-  const m = Math.floor(diff / 60000);
-  if (m < 1) return "刚刚";
-  if (m < 60) return `${m} 分钟前`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h} 小时前`;
-  const day = Math.floor(h / 24);
-  if (day < 30) return `${day} 天前`;
-  return d.toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" });
-}
 
 // Header 通知铃铛（Phase-3 §2.3.3）：未读红点（轮询）+ 下拉列表 + 点击直达工单 + 全部已读。
 export default function NotificationBell() {
@@ -153,7 +139,7 @@ export default function NotificationBell() {
                         </span>
                         <span className="mt-0.5 block text-sm text-ink">{n.message}</span>
                         <span className="mt-0.5 block text-xs text-ink-muted/70">
-                          {relTime(n.created_at)}
+                          {relTime(n.created_at, { month: "2-digit", day: "2-digit" })}
                         </span>
                       </span>
                     </button>

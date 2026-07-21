@@ -5,9 +5,11 @@ import type {
   RequirementStatus,
   BugStatus,
   DocumentKind,
+  GovernanceAction,
   NotificationType,
   Priority,
   Severity,
+  SettingsActivityAction,
   UserActivityAction,
   UserSource,
 } from "@/lib/types";
@@ -155,6 +157,7 @@ export const NOTIFICATION_LABELS: Record<NotificationType, string> = {
   converted: "转 BUG",
   document_added: "文档",
   user_registered: "新成员注册",
+  account_locked: "账号被锁定",
 };
 
 export const NOTIFICATION_ICONS: Record<NotificationType, string> = {
@@ -166,6 +169,7 @@ export const NOTIFICATION_ICONS: Record<NotificationType, string> = {
   converted: "🐞",
   document_added: "📎",
   user_registered: "🎉",
+  account_locked: "🔒",
 };
 
 // 形参收紧为 NotificationType（不再是 string）：两个 map 现在对该联合是**全覆盖**的，
@@ -342,6 +346,8 @@ export const USER_ACTIVITY_LABELS: Record<UserActivityAction, string> = {
   deactivated: "停用账号",
   password_reset: "重置密码",
   password_changed: "修改密码",
+  account_locked: "账号被锁定",
+  account_unlocked: "解除锁定",
 };
 
 export const USER_ACTIVITY_ICONS: Record<UserActivityAction, string> = {
@@ -352,6 +358,14 @@ export const USER_ACTIVITY_ICONS: Record<UserActivityAction, string> = {
   deactivated: "⊘",
   password_reset: "🔑",
   password_changed: "🔒",
+  account_locked: "🔒",
+  account_unlocked: "🔓",
+};
+
+// —— login-hardening-and-audit-console §3.4：审计页实体维度的中文名 ——
+export const AUDIT_ENTITY_LABELS: Record<"user" | "app_setting", string> = {
+  user: "账号",
+  app_setting: "站点设置",
 };
 
 /** 运行时兜底只为一种情形保留：后端比这份 bundle 新，推来了前端还不认识的动作。 */
@@ -361,4 +375,30 @@ export function userActivityLabel(action: UserActivityAction): string {
 
 export function userActivityIcon(action: UserActivityAction): string {
   return USER_ACTIVITY_ICONS[action] || "•";
+}
+
+// —— login-hardening-and-audit-console §5.3：站点治理审计的动作文案 ——
+// 站点设置动作（app_setting）的两个标签；账号动作复用上面的 USER_ACTIVITY_*。
+const SETTINGS_ACTIVITY_LABELS: Record<SettingsActivityAction, string> = {
+  registration_updated: "更新注册配置",
+  invite_code_rotated: "重新生成邀请码",
+};
+
+const SETTINGS_ACTIVITY_ICONS: Record<SettingsActivityAction, string> = {
+  registration_updated: "⚙",
+  invite_code_rotated: "🔑",
+};
+
+export function governanceActionLabel(action: GovernanceAction): string {
+  if (action in SETTINGS_ACTIVITY_LABELS) {
+    return SETTINGS_ACTIVITY_LABELS[action as SettingsActivityAction];
+  }
+  return USER_ACTIVITY_LABELS[action as UserActivityAction] || action;
+}
+
+export function governanceActionIcon(action: GovernanceAction): string {
+  if (action in SETTINGS_ACTIVITY_ICONS) {
+    return SETTINGS_ACTIVITY_ICONS[action as SettingsActivityAction];
+  }
+  return USER_ACTIVITY_ICONS[action as UserActivityAction] || "•";
 }

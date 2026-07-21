@@ -25,6 +25,9 @@ NOTIFICATION_TYPES = (
     # components/settings/NotificationPrefsCard.tsx（后者已改为从列表派生）。
     # 三者的类型已收紧到「漏改一处即编译错误」，npm run typecheck 是它们的机器执行者。
     "user_registered",
+    # 【login-hardening-and-audit-console §1.3 C-4-2】某账号连续失败被临时锁定 →
+    # 通知全体有效管理员。前端同样三处镜像必须同步，机器执行者同上。
+    "account_locked",
 )
 
 

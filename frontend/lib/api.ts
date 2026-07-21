@@ -38,6 +38,13 @@ export const REGISTRATION_META_KEY = "/auth/registration-meta";
 /** 根管理员专属的注册设置 key（含明文邀请码，非根管理员一律 403）。 */
 export const REGISTRATION_SETTINGS_KEY = "/settings/registration";
 
+/** 站点治理审计的**路径前缀**（login-hardening-and-audit-console §3.4 / 评审 P1-7）。
+ *  **有意不叫 `*_KEY`**：本文件顶部的不变量是「一个 `*_KEY` ⇒ 一种响应形状，分页 / 带
+ *  筛选的视图不得复用它们」（`USERS_KEY = "/users?limit=200"` 正是被点名的反例）。审计页
+ *  是分页 + 4 筛选的，页面 key 由 `useGovernanceAudit` 内联拼；这个常量只作前缀，
+ *  供失效前缀与 hook 拼串。 */
+export const GOVERNANCE_AUDIT_PREFIX = "/settings/audit";
+
 export class ApiError extends Error {
   status: number;
   detail?: unknown;

@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import type { ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { BrandLockup } from "@/components/brand/BrandLogo";
+import { useAuth } from "@/lib/auth";
 
 interface NavItem {
   href: string;
@@ -82,8 +83,29 @@ const NAV: NavItem[] = [
   },
 ];
 
+// 【login-hardening-and-audit-console §5.5】仅根管理员可见的导航项。插在「设置」**之前**
+// （设置在导航末位是既有约定，不挤走它）。R-13：user 未就绪（undefined）时不渲染它——
+// 宁可晚出现一项，不可先出现再消失。
+const ROOT_ONLY_NAV: NavItem[] = [
+  {
+    href: "/audit",
+    label: "审计",
+    match: "/audit",
+    icon: <Icon path="M9 12l2 2 4-4M12 3l7 4v5c0 5-3.5 8-7 9-3.5-1-7-4-7-9V7z" />,
+  },
+];
+
 export default function Sidebar() {
   const pathname = usePathname();
+  const { user } = useAuth();
+
+  // 审计项插在「设置」之前；user 未就绪或非根管理员时就是原样的 NAV。
+  const items = useMemo(() => {
+    if (!user?.is_root) return NAV;
+    const idx = NAV.findIndex((n) => n.href === "/settings");
+    if (idx < 0) return [...NAV, ...ROOT_ONLY_NAV];
+    return [...NAV.slice(0, idx), ...ROOT_ONLY_NAV, ...NAV.slice(idx)];
+  }, [user]);
 
   return (
     <aside className="flex w-56 shrink-0 flex-col border-r border-border bg-surface">
@@ -92,7 +114,7 @@ export default function Sidebar() {
       </div>
 
       <nav className="flex-1 space-y-1 p-3">
-        {NAV.map((item) => {
+        {items.map((item) => {
           const active = item.match
             ? pathname.startsWith(item.match)
             : pathname === item.href;

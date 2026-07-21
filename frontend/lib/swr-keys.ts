@@ -20,8 +20,11 @@ const TICKET_VIEW_PREFIXES = [
   "/search",
 ];
 
-/** 受成员 / 项目 / Agent 等管理动作影响的所有视图前缀。 */
-const ADMIN_VIEW_PREFIXES = ["/users", "/projects", "/agents", "/stats"];
+/** 受成员 / 项目 / Agent 等管理动作影响的所有视图前缀。
+ *  【login-hardening-and-audit-console §3.4】追加 `/settings/audit`：解锁账号 / 改注册配置
+ *  后审计页要跟着刷。就地扩这个数组字面量（本常量模块私有，对外只暴露
+ *  `invalidateAdminViews`）。 */
+const ADMIN_VIEW_PREFIXES = ["/users", "/projects", "/agents", "/stats", "/settings/audit"];
 
 function invalidateByPrefix(mutate: ScopedMutator, prefixes: string[]) {
   return mutate(

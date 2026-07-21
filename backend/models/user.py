@@ -41,6 +41,14 @@ class User(db.Model):
     must_change_password = db.Column(db.Boolean, nullable=False, default=False,
                                      server_default="0")
 
+    # 【login-hardening-and-audit-console §1.2 B-1】登录闸门三列。默认值都是常量
+    # （SQLite ADD COLUMN 的硬性要求），存量行零回填即语义正确：存量用户「从未记录过
+    # 登录、没有失败、没有锁定」全部为真。三列必须同时登记进 schema_sync.ADDITIVE_COLUMNS。
+    last_login_at = db.Column(db.DateTime, nullable=True)
+    failed_login_count = db.Column(db.Integer, nullable=False, default=0,
+                                   server_default="0")
+    locked_until = db.Column(db.DateTime, nullable=True)
+
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=utcnow, onupdate=utcnow)
 
@@ -71,9 +79,26 @@ class User(db.Model):
             # /force-password。**summary() 同样有意不加**——指派选择器与时间线不关心
             # 这件事，多传只会让 AssigneeSummary 变胖。
             "must_change_password": bool(self.must_change_password),
+            # 【login-hardening-and-audit-console §1.2 B-7】additive：团队页据此渲染
+            # 「已锁定」徽章 + 「最后登录」列。**is_locked 由服务端判定**，前端不拿
+            # locked_until 自己跟本地时钟比——用户机器时间可能偏几分钟，那会让已解锁的
+            # 账号在界面上还显示着锁。**failed_login_count 有意不进 API**：GET /api/users 是
+            # jwt_required() 而非 admin-only，全员可读，「某人错了 7 次」对已拿到低权限凭据
+            # 的攻击者是有用的侦察信息。summary() 同样一个键都不加。
+            "last_login_at": _iso(self.last_login_at),
+            "locked_until": _iso(self.locked_until) if self.is_locked() else None,
+            "is_locked": self.is_locked(),
             "created_at": _iso(self.created_at),
             "updated_at": _iso(self.updated_at),
         }
+
+    def is_locked(self) -> bool:
+        """此刻是否处于登录锁定期。None / 已过期 locked_until 均为未锁定。
+
+        与 `services/login_guard.py::is_locked` 同一判据，内联在模型里避免
+        `to_dict` 反向 import 服务层（models 不依赖 services）。
+        """
+        return self.locked_until is not None and self.locked_until > utcnow()
 
     def summary(self) -> dict:
         """指派/时间线渲染用的精简概要。"""

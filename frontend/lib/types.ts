@@ -54,6 +54,14 @@ export interface User {
    *  后端有一道全局闸门：带此标记的人在改掉口令之前，除了读「我是谁」和改密码以外
    *  任何 `/api/*` 都是 403（account-security-and-governance §2.2 B-3）。 */
   must_change_password: boolean;
+  /** 最近一次**成功**登录（login-hardening-and-audit-console §1.2 B-7，additive）；
+   *  null = 从未登录。团队页据此渲染「最后登录」列。 */
+  last_login_at: string | null;
+  /** 锁定到期时刻；服务端已判过期——**已解锁时恒为 null**，前端不拿它跟本地时钟比。 */
+  locked_until: string | null;
+  /** 由服务端判定的锁定态（additive）；true 时团队页渲染「已锁定」徽章与「解锁」操作。
+   *  **failed_login_count 有意不在 API 里**，故前端拿不到、也不该渲染失败次数。 */
+  is_locked: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -75,7 +83,16 @@ export type UserActivityAction =
   | "activated"
   | "deactivated"
   | "password_reset"
-  | "password_changed";
+  | "password_changed"
+  // login-hardening-and-audit-console §1.3 C-4-1：登录闸门两个动作。
+  | "account_locked"
+  | "account_unlocked";
+
+/** 站点设置治理动作（后端 services/audit.py::SETTINGS_ACTIONS 的镜像）。 */
+export type SettingsActivityAction = "registration_updated" | "invite_code_rotated";
+
+/** 站点治理审计的动作全集（`GET /settings/audit` 的 ?action= 取值域）。 */
+export type GovernanceAction = UserActivityAction | SettingsActivityAction;
 
 /** `GET /users/:id/activities` 的一行（Activity.to_dict()）。 */
 export interface UserActivity {
@@ -264,7 +281,9 @@ export type NotificationType =
   | "agent_advanced"
   | "converted"
   | "document_added"
-  | "user_registered";
+  | "user_registered"
+  // login-hardening-and-audit-console §1.3 C-4-2：某账号连续失败被锁 → 通知全体管理员。
+  | "account_locked";
 
 /**
  * `NotificationType` 的**运行时**镜像（self-service-registration §2.3 C-1 / R-17）。
@@ -283,6 +302,7 @@ export const NOTIFICATION_TYPE_LIST: readonly NotificationType[] = [
   "converted",
   "document_added",
   "user_registered",
+  "account_locked",
 ];
 
 export interface Notification {
@@ -434,6 +454,9 @@ export interface RegistrationMeta {
   password_min_char_classes: number;
 }
 
+/** 邀请码当前状态（服务端算好下发，前端不自行判定）。 */
+export type InviteStatus = "active" | "expired" | "exhausted" | "disabled";
+
 /** `GET/PATCH /settings/registration` 的响应；`invite_code` 明文，仅根管理员可读。 */
 export interface RegistrationSettings {
   enabled: boolean;
@@ -442,6 +465,43 @@ export interface RegistrationSettings {
   allowed_default_roles: Role[];
   updated_at: string | null;
   updated_by: { id: number; name: string } | null;
+  // login-hardening-and-audit-console §2.4：邀请码生命周期五键（additive）。
+  /** 失效时刻（ISO，带 Z）；null = 永不过期。 */
+  invite_expires_at: string | null;
+  /** 名额上限；0 = 不限。 */
+  invite_max_uses: number;
+  /** 当前这个码已注册出多少个仍在库里的账号（派生值）。 */
+  invite_uses: number;
+  /** 当前码的生效时刻（ISO）；null = 自古以来。 */
+  invite_issued_at: string | null;
+  /** 状态：active / expired / exhausted / disabled（disabled 优先级最高）。 */
+  invite_status: InviteStatus;
+}
+
+/** `GET /settings/audit` 的一行：Activity.to_dict() + actor / target 解析块。 */
+export interface GovernanceActivity {
+  id: number;
+  entity_type: "user" | "app_setting";
+  entity_id: number;
+  action: GovernanceAction;
+  from_status: string | null;
+  to_status: string | null;
+  actor_type: "user" | "agent" | "system" | null;
+  actor_id: number | null;
+  message: string | null;
+  created_at: string;
+  /** 施动者；system 事件（如 account_locked）恒为 null。 */
+  actor: { id: number; name: string } | null;
+  /** 被治理对象；app_setting 单例恒为 null。 */
+  target: { id: number; name: string } | null;
+}
+
+/** 审计页筛选态（空串 = 不过滤，与后端查询串「空串等价于不传」对齐）。 */
+export interface AuditFilters {
+  entity_type: "" | "user" | "app_setting";
+  action: "" | GovernanceAction;
+  actor_id: string;
+  since: string;
 }
 
 // —— bulk-operations：需求 / BUG 批量操作 ——

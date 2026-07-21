@@ -9,9 +9,9 @@ from flask import Blueprint, jsonify
 from flask_jwt_extended import jwt_required
 from sqlalchemy import or_
 
-from extensions import db
+from extensions import db, utcnow
 from models.user import User, ROLES, USER_SOURCES
-from services import accounts, audit, lifecycle, passwords
+from services import accounts, audit, lifecycle, login_guard, passwords
 from services.auth_helpers import current_user, require_role
 from services.pagination import paginate, with_total_count
 from services.scope import want_query_bool, want_query_str
@@ -52,6 +52,13 @@ def _apply_user_filters(query):
     source = want_query_str("source", choices=USER_SOURCES)
     if source is not None:
         query = query.filter(User.source == source)
+    # 【login-hardening-and-audit-console §1.2 B-8】第五个筛选：锁定状态。
+    # 它是 to_dict 已暴露事实的查询形式，保持全员可用；非法取值 → 既有 400。
+    locked = want_query_bool("locked")
+    if locked is not None:
+        now = utcnow()
+        query = query.filter(User.locked_until > now) if locked \
+            else query.filter(or_(User.locked_until.is_(None), User.locked_until <= now))
     return query
 
 
@@ -255,6 +262,27 @@ def reset_password(user_id):
         # 明文，**仅此一次**：管理员指定的口令由他自己知道，不必回传。
         "temporary_password": password if generated else None,
     }), 200
+
+
+@bp.post("/<int:user_id>/unlock")
+@require_role("admin")
+def unlock_user(user_id):
+    """解除账号的登录锁定（login-hardening-and-audit-console §2.2 / B-6）。
+
+    body 忽略（空 body 合法）。**没有根管理员 409 守卫**——根管理员结构上不可能被锁
+    （note_failed_login 首行 `if user.is_root: return False`），对它调用本端点是一次幂等
+    no-op，返回 200 + `unlocked: false`。为一个不可能发生的状态写 409 分支，正是
+    CLAUDE.md §五禁止的「为理论上不会发生的分支写防御性代码」。
+
+    `unlocked: false` 时**不写审计**——一次没有改变任何状态的操作不该在时间线上留一行。
+    """
+    user = db.session.get(User, user_id)
+    if user is None:
+        return jsonify({"error": "user not found"}), 404
+    unlocked = login_guard.unlock(user, current_user())
+    if unlocked:
+        db.session.commit()
+    return jsonify({"user": user.to_dict(), "unlocked": unlocked}), 200
 
 
 @bp.get("/<int:user_id>/activities")

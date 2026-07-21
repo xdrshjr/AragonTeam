@@ -20,9 +20,13 @@ export interface MemberFilters {
   role: Role | "";
   isActive: "" | "true" | "false";
   source: UserSource | "";
+  // 【login-hardening-and-audit-console §3.4 / 评审 P2-9】锁定状态筛选，三态照抄「状态」。
+  locked: "" | "true" | "false";
 }
 
-export const EMPTY_FILTERS: MemberFilters = { q: "", role: "", isActive: "", source: "" };
+export const EMPTY_FILTERS: MemberFilters = {
+  q: "", role: "", isActive: "", source: "", locked: "",
+};
 
 const ROLE_OPTIONS = (["admin", "pm", "member"] as Role[]).map((r) => ({
   value: r,
@@ -32,6 +36,11 @@ const ROLE_OPTIONS = (["admin", "pm", "member"] as Role[]).map((r) => ({
 const STATUS_OPTIONS = [
   { value: "true", label: "在职" },
   { value: "false", label: "已停用" },
+];
+
+const LOCKED_OPTIONS = [
+  { value: "true", label: "已锁定" },
+  { value: "false", label: "未锁定" },
 ];
 
 // 只放两个来源：`admin` / `seed` 是绝大多数行，作为筛选项没有区分度。
@@ -97,6 +106,16 @@ export default function MemberFilterBar({ filters, onChange }: Props) {
         options={SOURCE_OPTIONS}
         onChange={(e) => onChange({ ...filters, source: e.target.value as UserSource | "" })}
       />
+      <Select
+        label="锁定状态"
+        name="member_locked"
+        value={filters.locked}
+        placeholder="全部"
+        options={LOCKED_OPTIONS}
+        onChange={(e) =>
+          onChange({ ...filters, locked: e.target.value as MemberFilters["locked"] })
+        }
+      />
     </div>
   );
 }
@@ -108,5 +127,6 @@ export function toQuery(filters: MemberFilters): string {
   if (filters.role) parts.push(`role=${filters.role}`);
   if (filters.isActive) parts.push(`is_active=${filters.isActive}`);
   if (filters.source) parts.push(`source=${filters.source}`);
+  if (filters.locked) parts.push(`locked=${filters.locked}`);
   return parts.join("&");
 }

@@ -214,6 +214,32 @@ def notify_user_registered(new_user) -> int:
     return sent
 
 
+def notify_account_locked(locked_user) -> int:
+    """某账号被连续失败锁定后 → 向全部**有效管理员**扇出一条通知（login-hardening §1.3 C-4-3）。
+
+    与 `notify_user_registered` **逐字同构**：`no_autoflush` 包住收件人查询、不 commit、
+    message 必传、`entity_type`/`entity_id` 传 None。施动者传 None（system）——`notify()`
+    的「不给自己发」判据因此天然不触发，被锁的人如果自己是 admin 也会收到，这是对的：
+    他需要知道自己的账号刚被打锁了。
+
+    Args:
+        locked_user: 刚被置 locked_until、尚未 commit 的 User。
+
+    Returns:
+        实际发出的通知条数。
+    """
+    with db.session.no_autoflush:
+        admins = User.query.filter(User.role == "admin",
+                                   User.is_active.is_(True)).all()
+    who = _short(locked_user.display_name or locked_user.username)
+    sent = 0
+    for admin in admins:
+        if notify(admin.id, "account_locked", actor=None,
+                  message=f"账号 {who} 因连续登录失败被临时锁定") is not None:
+            sent += 1
+    return sent
+
+
 def notify_mentions(comment, actor, ticket=None):
     """解析评论 body 中的 @username，向存在的用户各发一条 mentioned 通知（去重、排除自己）。
 

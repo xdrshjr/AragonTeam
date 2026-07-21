@@ -21,6 +21,7 @@ import Toggle from "@/components/ui/Toggle";
 import ConfirmDialog from "@/components/ui/ConfirmDialog";
 import ErrorState from "@/components/ui/ErrorState";
 import { SkeletonRows } from "@/components/ui/Skeleton";
+import InviteQuotaFields from "@/components/settings/InviteQuotaFields";
 
 function errText(err: unknown): string {
   return err instanceof ApiError ? err.message : "保存失败";
@@ -155,6 +156,9 @@ export default function RegistrationCard() {
           </div>
         </div>
 
+        {/* 【login-hardening-and-audit-console §5.1】邀请码的期限 / 额度 / 用量。 */}
+        <InviteQuotaFields settings={settings} update={update} />
+
         <Select
           label="新用户默认角色"
           name="default_role"
@@ -198,6 +202,10 @@ export default function RegistrationCard() {
             <strong className="text-ink">旧邀请码立即失效</strong>
             ，任何还没用它注册的人都需要重新向你索取；
             <strong className="text-ink">已注册的账号不受影响</strong>。
+            <br />
+            <span className="text-ink-muted">
+              已用名额将重新从 0 计起，有效期与名额上限保持不变。
+            </span>
           </>
         }
         onConfirm={async () => {
