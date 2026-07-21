@@ -6,9 +6,19 @@
 本模块把「拿到一个 dict」「取一个受校验字段」收敛为可复用、可单测的边界函数，
 错误统一走 400 JSON 契约 {error, detail:{field, expected}}，绝不 500。
 """
+import re
 from typing import Optional, Iterable
 
 from flask import request
+
+# 邮箱务实匹配（含 @ 且有域名段）。**全站唯一真相**（self-service-registration 评审 P0-1）：
+# 此前 `routes/me.py` 持有 `_EMAIL_RE`，`routes/users.py` 从那里 import 并包一层
+# `_want_email`，本轮新增的 `/auth/signup` 若再从 routes 里 import 就会织出第三条
+# route→route 依赖。校验规则属边界语义，本就该住在边界模块里。
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+# users.email 的列宽（models/user.py）。超长即 400，不留给数据库去截断。
+EMAIL_MAX_LENGTH = 255
 
 
 # SQLite / 多数 RDBMS 的 INTEGER 值域（64 位有符号）。与 services/scope.py 的同名常量
@@ -131,3 +141,26 @@ def want_bool(data: dict, key: str, *, required: bool = False,
     if not isinstance(v, bool):
         raise ValidationError(f"{key} must be a boolean", field=key, expected="boolean")
     return v
+
+
+def want_email(data: dict, key: str = "email") -> Optional[str]:
+    """取一个**可选**邮箱：非串 / 超 255 / 格式非法 → 400；缺省 / 空串 → None。
+
+    三条注册与改资料路径（`POST /api/users`、`PATCH /api/me/profile`、
+    `POST /api/auth/signup`）共用本函数，保证同一个非法邮箱在三处得到同一水位的 400
+    （self-service-registration §3.2 / 评审 P0-1）。
+
+    Args:
+        data: 已经过 json_body() 归一的 dict。
+        key: 字段名（同时用作错误体的 detail.field）。
+
+    Returns:
+        清洁后的邮箱串，或 None（未提供 / 显式清空）。
+
+    Raises:
+        ValidationError: 非字符串 / 超长 / 格式非法。
+    """
+    email = want_str(data, key, required=False, max_len=EMAIL_MAX_LENGTH) or None
+    if email is not None and not _EMAIL_RE.match(email):
+        raise ValidationError(f"{key} is invalid", field=key, expected="email address")
+    return email

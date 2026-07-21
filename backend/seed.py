@@ -12,6 +12,8 @@ Agent 执行引擎，已由该迭代真实化）。
 `tools/purge_demo_data.py` 日后精确识别演示数据的**唯一**依据。新增任何一行种子数据
 都必须同步登记，否则它就变成了一条永远清不掉的「无出身」数据。
 """
+from flask import current_app
+
 from extensions import db
 from models.user import User
 from models.agent import Agent
@@ -22,9 +24,7 @@ from models.activity import Activity
 from models.comment import Comment
 from models.notification import Notification
 from models.seed_record import SeedRecord
-
-# 头像底色（暖色系，与 auth._PALETTE 一致）。
-_COLORS = ["#C15F3C", "#3B6EA5", "#6E8B3D", "#8A5A9B", "#C99A2E", "#4B8B8B"]
+from services import avatars
 
 
 def seed_if_empty():
@@ -39,9 +39,18 @@ def seed_if_empty():
     # —— 用户：只留 admin 一个账号 ——
     # 其余成员由管理台真实创建（POST /api/users 已具备）。「末任管理员不变量」
     # （lifecycle.would_orphan_admins）因此更关键——它已实现，本轮不动。
-    admin = User(username="admin", role="admin", display_name="Ada（管理员）",
-                 email="admin@aragon.dev", avatar_color=_COLORS[0])
-    admin.set_password("admin123")
+    # 【self-service-registration §2.1 A-3】用户名 / 口令改读 ROOT_ADMIN_* 配置：
+    # 自定义了 ROOT_ADMIN_USERNAME=root 的部署，seed 直接建 root，随后 ensure_root_admin
+    # 认领同一行——**不会出现两个管理员**。默认值与既有逐字相同，存量库不受影响。
+    config = current_app.config
+    root_username = config["ROOT_ADMIN_USERNAME"].strip()
+    admin = User(username=root_username, role="admin",
+                 display_name=config["ROOT_ADMIN_DISPLAY_NAME"],
+                 email=config["ROOT_ADMIN_EMAIL"], source="seed",
+                 # 底色沿用调色板首色（与迁移前逐字节相同），不改为 pick_color——
+                 # 那会让存量演示账号的头像颜色无缘无故变一次。
+                 avatar_color=avatars.PALETTE[0])
+    admin.set_password(config["ROOT_ADMIN_PASSWORD"])
     db.session.add(admin)
 
     # —— Agent：只留 dev-agent ——

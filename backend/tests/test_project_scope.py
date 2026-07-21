@@ -163,3 +163,57 @@ def test_next_position_is_per_project(client, auth, data, app):
     _create(client, headers, "A2", data["project_id"])
     first_b = _create(client, headers, "B1", pb)
     assert first_b["position"] == 0
+
+
+# —— self-service-registration §8.2 用例 42：查询串枚举 / 布尔原语的 400 契约 ——
+# 落在本文件是因为 `services/scope.py` 的既有 `want_query_int` 用例也在这里，三者共用
+# 同一个 QueryParamError → 全局 400 处理器，放在一处才看得出它们形状一致。
+
+def test_want_query_str_and_bool_reject_garbage(client, auth):
+    """非法枚举 / 非法布尔一律 400，且响应体与 want_query_int 的契约同形。"""
+    headers = auth("admin")
+
+    for query, field in (("role=root", "role"), ("is_active=ture", "is_active"),
+                         ("source=magic", "source")):
+        r = client.get(f"/api/users?{query}", headers=headers)
+        assert r.status_code == 400, (query, r.get_json())
+        detail = r.get_json()["detail"]
+        assert detail["field"] == field
+        assert "expected" in detail and "got" in detail
+
+
+def test_user_filters_narrow_the_list(client, auth, data):
+    """四个筛选都生效，且**不传时行为逐字不变**（裸数组 + X-Total-Count）。"""
+    headers = auth("admin")
+    baseline = client.get("/api/users", headers=headers)
+    assert baseline.status_code == 200
+    total = int(baseline.headers["X-Total-Count"])
+
+    only_pm = client.get("/api/users?role=pm", headers=headers)
+    by_keyword = client.get("/api/users?q=Mia", headers=headers)
+    by_source = client.get("/api/users?source=signup", headers=headers)
+
+    assert [u["role"] for u in only_pm.get_json()] == ["pm"]
+    assert [u["username"] for u in by_keyword.get_json()] == ["member"]
+    assert by_source.get_json() == []          # fixture 用户都是管理员建的
+    assert total == len(baseline.get_json())
+
+
+def test_blank_filter_values_are_ignored(client, auth):
+    """空串等价于不传——前端清空搜索框时仍会带上这个键。"""
+    headers = auth("admin")
+
+    with_blank = client.get("/api/users?q=&role=&is_active=&source=", headers=headers)
+
+    assert with_blank.status_code == 200
+    assert len(with_blank.get_json()) == len(client.get("/api/users", headers=headers).get_json())
+
+
+def test_keyword_filter_escapes_like_metacharacters(client, auth):
+    """用户搜 `%` 必须当字面量匹配，不能变成「匹配所有人」。"""
+    headers = auth("admin")
+
+    r = client.get("/api/users?q=%25", headers=headers)
+
+    assert r.status_code == 200
+    assert r.get_json() == []

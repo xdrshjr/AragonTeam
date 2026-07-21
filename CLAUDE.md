@@ -116,10 +116,25 @@ This project has a pre-generated index for quick codebase understanding.
   query against an existing `aragon.db` fails with `no such column` → 500. That module is
   **ADD COLUMN only**; the first type change / constraint change / data backfill means switching to
   a real migration tool, not extending it.
+- **Root admin is defined by the config file, not the DB.** `ROOT_ADMIN_*` in
+  `backend/config.py` is the single source of truth; `backend/services/bootstrap.py::ensure_root_admin`
+  runs on every boot (**after** `seed_if_empty()` — reversing that order makes a fresh DB skip all
+  seed data) and idempotently forces that account to exist, be an active admin, and hold
+  `users.is_root`. That row **cannot be demoted, deactivated, or have its password reset by
+  anyone else** (409 via `services/lifecycle.py::conflict_root_admin`), and
+  `tools/purge_demo_data.py` **never deletes or deactivates an `is_root` row** even when it
+  carries a `SeedRecord` — deleting it means nobody can log in and there is no in-product recovery.
+- **Any new CLI tool or app fixture must explicitly disable `ROOT_ADMIN_BOOTSTRAP`** — same rule
+  as the existing `SEED_ON_STARTUP` / `RELEASE_STALE_LOCKS_ON_STARTUP`. There are **five** shutoff
+  points today (`TestConfig`, `tests/conftest.py::file_app`, and the three `tools/*.py`). Miss one
+  and a read-only/cleanup tool silently writes a user row into its target DB — which breaks
+  `purge_demo_data`'s first principle ("dry-run never writes"). `file_app` keeps the flag ahead of
+  `**overrides` so a test can turn it back on deliberately.
 - **Quality gates:** Backend `pytest -q`, frontend `npm run typecheck` + `npm run build`.
-  Judge the backend gate **relatively**, not against a hard-coded count: record a baseline with
-  `pytest -q` before you start, then require **zero failures and no drop in total case count**.
-  (The previously documented "93 cases" was years-stale — the suite is now 380+.)
+  Judge the backend gate **relatively**, not against a hard-coded count: run
+  `pytest -q --collect-only` **before you start** to take a live baseline, then require
+  **zero failures and no drop in total case count**. Do not trust any number written down here —
+  every previously documented figure ("93 cases", "380+") went stale within a round or two.
 - **Seed data is one row per category.** `backend/seed.py` writes exactly 8 rows and registers
   each of them in `seed_records` (`backend/models/seed_record.py`). Any new seed row **must**
   be registered too, otherwise it becomes demo data that `backend/tools/purge_demo_data.py`

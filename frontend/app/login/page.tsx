@@ -1,25 +1,26 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/lib/toast";
 import { ApiError } from "@/lib/api";
+import { useRegistrationMeta } from "@/hooks/useRegistrationMeta";
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
-import { BrandLockup } from "@/components/brand/BrandLogo";
+import AuthSplitLayout from "@/components/auth/AuthSplitLayout";
 
-// 默认账号（seed），点击可一键填充。
-// 示例数据每类只留一条（data-persistence-and-seed-slimming §2.5），因此这里也只剩
-// admin 一个账号——其余成员请登录后在「团队」页真实创建。
-const DEMO_ACCOUNTS = [
-  { username: "admin", password: "admin123", label: "管理员" },
-];
+// 【self-service-registration §7 R-13】此处曾有一个 DEMO_ACCOUNTS 一键填充块
+// （admin / admin123）。它在任何真实部署里都是一个**公开页面上的管理员后门**，
+// 本轮随自助注册一并删除。信息本身没有丢失：默认账号来自后端配置 `ROOT_ADMIN_*`，
+// README 的「快速开始」写明了开发默认值。
 
 export default function LoginPage() {
   const router = useRouter();
   const { login, user, loading } = useAuth();
   const toast = useToast();
+  const { meta } = useRegistrationMeta();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -49,79 +50,42 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen">
-      {/* 左侧品牌区 */}
-      <div className="hidden flex-1 flex-col justify-between bg-clay-soft/40 p-12 lg:flex">
-        <BrandLockup className="h-10 w-[236px]" priority />
-        <div className="max-w-md">
-          <h1 className="font-serif text-4xl leading-tight text-ink">
-            AI 时代的
-            <br />
-            团队协作平台
-          </h1>
-          <p className="mt-4 text-ink-muted">
-            需求与 BUG 不只指派给人，也能指派给 Agent。人与 AI
-            混合协作的每一步流转，都被完整记录。
-          </p>
-        </div>
-        <div className="text-sm text-ink-muted">© AragonTeam · Anthropic 风格设计</div>
-      </div>
-
-      {/* 右侧登录表单 */}
-      <div className="flex flex-1 items-center justify-center bg-bg p-6">
-        <div className="w-full max-w-sm">
-          <div className="mb-8 lg:hidden">
-            <BrandLockup className="h-9 w-[212px]" priority />
-          </div>
-          <h2 className="font-serif text-2xl text-ink">欢迎回来</h2>
-          <p className="mt-1 text-sm text-ink-muted">登录以进入你的工作台</p>
-
-          <form onSubmit={onSubmit} className="mt-6 flex flex-col gap-4">
-            <Input
-              label="用户名"
-              name="username"
-              value={username}
-              autoComplete="username"
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="admin"
-            />
-            <Input
-              label="密码"
-              name="password"
-              type="password"
-              value={password}
-              autoComplete="current-password"
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-            />
-            <Button type="submit" disabled={submitting} className="mt-2 w-full">
-              {submitting ? "登录中…" : "登录"}
-            </Button>
-          </form>
-
-          <div className="mt-8 rounded-xl border border-border bg-surface p-4 shadow-card">
-            <div className="mb-2 text-xs font-medium text-ink-muted">
-              演示账号（点击填充）
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {DEMO_ACCOUNTS.map((a) => (
-                <button
-                  key={a.username}
-                  type="button"
-                  onClick={() => {
-                    setUsername(a.username);
-                    setPassword(a.password);
-                  }}
-                  className="rounded-lg border border-border px-2.5 py-1 text-xs text-ink hover:bg-black/[0.04]"
-                >
-                  {a.username}
-                  <span className="ml-1 text-ink-muted">· {a.label}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
+    <AuthSplitLayout
+      title="欢迎回来"
+      subtitle="登录以进入你的工作台"
+      footer={
+        // 注册关闭时不渲染入口：给一个点进去只会看到「未开放」的链接是无谓的绕路。
+        meta.enabled ? (
+          <span className="text-ink-muted">
+            还没有账号？
+            <Link href="/register" className="ml-1 font-medium text-clay hover:underline">
+              立即注册
+            </Link>
+          </span>
+        ) : undefined
+      }
+    >
+      <form onSubmit={onSubmit} className="mt-6 flex flex-col gap-4">
+        <Input
+          label="用户名"
+          name="username"
+          value={username}
+          autoComplete="username"
+          onChange={(e) => setUsername(e.target.value)}
+        />
+        <Input
+          label="密码"
+          name="password"
+          type="password"
+          value={password}
+          autoComplete="current-password"
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="••••••••"
+        />
+        <Button type="submit" disabled={submitting} className="mt-2 w-full">
+          {submitting ? "登录中…" : "登录"}
+        </Button>
+      </form>
+    </AuthSplitLayout>
   );
 }

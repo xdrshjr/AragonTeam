@@ -13,6 +13,7 @@ from routes.me import bp as me_bp
 from routes.search import bp as search_bp
 from routes.documents import bp as documents_bp
 from routes.ticket_documents import bp as ticket_documents_bp
+from routes.settings import admin_settings_bp
 
 
 def register_blueprints(app):
@@ -33,3 +34,5 @@ def register_blueprints(app):
     # —— ticket-document-management：文档库 + 工单文档（全流程文档管理）——
     app.register_blueprint(documents_bp)
     app.register_blueprint(ticket_documents_bp)
+    # —— self-service-registration：站点级设置（注册开关 / 邀请码 / 默认角色），全部 require_root ——
+    app.register_blueprint(admin_settings_bp)

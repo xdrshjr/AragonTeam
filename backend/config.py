@@ -99,6 +99,43 @@ class Config:
     # 在人按下 --apply 时读它。本项目没有调度器，不可逆操作应当由人按下。
     DOC_TRASH_RETENTION_DAYS = _env_int("DOC_TRASH_RETENTION_DAYS", 30)
 
+    # —— 根管理员（self-service-registration §2.1）——
+    # 【为什么放配置而不是库】它是「所有管理员都进不来」时唯一的破窗入口：
+    # 改环境变量 + 重启 = 恢复。放库里就没有这条恢复路径。
+    ROOT_ADMIN_USERNAME = os.environ.get("ROOT_ADMIN_USERNAME", "admin")
+    ROOT_ADMIN_PASSWORD = os.environ.get("ROOT_ADMIN_PASSWORD", "admin123")
+    ROOT_ADMIN_EMAIL = os.environ.get("ROOT_ADMIN_EMAIL", "admin@aragon.dev")
+    ROOT_ADMIN_DISPLAY_NAME = os.environ.get("ROOT_ADMIN_DISPLAY_NAME", "Ada（管理员）")
+    # 启动期是否执行根管理员保障。**测试环境与三个运维 CLI 必须关**
+    # （关闭清单五处见 spec §2.1 A-3′；漏关会让 CLI 往目标库写用户行）。
+    ROOT_ADMIN_BOOTSTRAP = _env_bool("ROOT_ADMIN_BOOTSTRAP", True)
+    # 是否在每次启动时把库内密码重置回配置值。**默认 false**：默认 true 会让
+    # 「根管理员在 /settings 改了密码 → 重启后被环境变量悄悄改回去」，是静默数据丢失。
+    # 置 true 是唯一的忘密码恢复流程，但**四步顺序不可换**：
+    #   1) 设 true  2) 重启（此刻库内口令 = 配置口令）  3) 用配置口令登录
+    #   4) **先把 flag 设回 false 并再重启一次**，之后才去 /settings 改新密码。
+    # 把第 4 步的两半颠倒（先改密码、后关 flag）会让新密码在下一次重启时被静默改回旧值——
+    # 那正是本 flag 默认 false 所要防的事，只是延后了一次重启。
+    # 为让这条流程不可能被忘记：flag 为真时 ensure_root_admin **每次启动都打 warning**。
+    ROOT_ADMIN_SYNC_PASSWORD = _env_bool("ROOT_ADMIN_SYNC_PASSWORD", False)
+
+    # —— 自助注册（self-service-registration §2.2）——
+    # 邀请码 / 开关 / 默认角色的**兜底默认值**；库内 app_settings 有行时以库为准。
+    REGISTRATION_INVITE_CODE = os.environ.get("REGISTRATION_INVITE_CODE", "aragon")
+    REGISTRATION_ENABLED = _env_bool("REGISTRATION_ENABLED", True)
+    # 【R-16】本项**不是**最终真相：get_registration_settings() 会无条件把它过一遍
+    # SIGNUP_ROLES 白名单。否则 `REGISTRATION_DEFAULT_ROLE=admin` 一个环境变量就能让
+    # 任何拿到邀请码的人注册即为管理员——白名单只挡了 PATCH 端点，挡不住配置兜底路径。
+    REGISTRATION_DEFAULT_ROLE = os.environ.get("REGISTRATION_DEFAULT_ROLE", "member")
+    # 5 分钟窗口内单个客户端的注册尝试上限（成功与失败都计数）。
+    SIGNUP_MAX_ATTEMPTS = _env_int("SIGNUP_MAX_ATTEMPTS", 10)
+    # 【R-14】信任几层反向代理的 X-Forwarded-For。**默认 0 = 一个都不信**，
+    # 即 ratelimit.client_ip() 恒等于 request.remote_addr，与今天的 /login 行为逐字节相同。
+    # 本仓库自带 nginx 反代模板（ops/templates/aragonteam-nginx-http），在那种部署下
+    # remote_addr 恒为 127.0.0.1，限流会退化成**全站单桶**；此时必须置 1。
+    # 选「显式配置」而不是无脑接 ProxyFix：无条件信任转发头等于把限流键交给客户端伪造。
+    TRUST_PROXY_COUNT = _env_int("TRUST_PROXY_COUNT", 0)
+
     # —— SQLite 落盘同步级别（data-persistence §2.3，评审 P1-3）——
     # 【文档性镜像，不是 PRAGMA 的读取源】PRAGMA 由 extensions.py 的全局 connect
     # 监听器设置，那里没有 Flask 上下文，只能读 os.environ。本字段只服务
@@ -131,5 +168,14 @@ class TestConfig(Config):
     # 让「归档相关用例」可以通过 monkeypatch 精确开启，而不必担心某天有人放宽了
     # `_llm_active()` 就静默改变了另外 500 条用例的行为。
     DOC_AGENT_ARCHIVE = False
+    # 【self-service-registration §2.1 A-1 · 必须关】若启动期自动建根管理员，users 表在
+    # 每个用例开始时就多一行，`GET /api/users` 的长度断言、active_admin_count 断言、
+    # 末任管理员 409 用例会**成批失败**。需要根管理员的用例由 conftest 的 root_admin
+    # fixture 显式调用 ensure_root_admin。
+    # 注意：关 bootstrap 的地方不止这一处——conftest 的 file_app 基类是 Config 而非
+    # TestConfig，三个运维 CLI 亦然（关闭清单共五处，见 spec §2.1 A-3′）。
+    ROOT_ADMIN_BOOTSTRAP = False
+    # 阈值调小以便用 4 次请求测出 429（与 LOGIN_MAX_ATTEMPTS=3 同一手法）。
+    SIGNUP_MAX_ATTEMPTS = 3
     # **UPLOAD_DIR 有意不在这里写死**：TestConfig 是类级常量，全套用例共享一份，
     # 写死就等于所有用例共用一个目录。由 conftest 的 app fixture 逐用例注入 tmp_path。

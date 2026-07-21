@@ -67,6 +67,35 @@ def conflict_last_admin():
     }), 409
 
 
+# ————————————————— 根管理员保护（self-service-registration §2.1 A-4）—————————————————
+
+def is_protected_root(user) -> bool:
+    """该用户是否为受保护的根管理员。
+
+    用 `getattr` 兜底而不是直接读属性：`purge` 工具与部分测试会传入轻量对象，
+    多一层容忍不会掩盖任何真实缺陷（列不存在时 schema_sync 早已在启动期报错）。
+    """
+    return bool(getattr(user, "is_root", False))
+
+
+def conflict_root_admin(reason: str):
+    """根管理员受保护 409。稳定错误串，勿更名（对外错误契约，CLAUDE.md §五）。
+
+    与本模块既有三种 409 一致：**不带 `allowed` 键**——前端看板拖拽以 `err.allowed`
+    是否存在分流错误，不得误伤（spec §4.3）。
+
+    Args:
+        reason: 具体到哪一条保护规则被触发，直接呈现给管理员。
+    """
+    return jsonify({
+        "error": "root administrator is protected",
+        "detail": {
+            "reason": reason,
+            "hint": "change ROOT_ADMIN_* in the backend config and restart",
+        },
+    }), 409
+
+
 # ————————————————————— 引用守卫（§2.6 / §2.7）—————————————————————
 
 def project_references(project_id: int) -> dict:

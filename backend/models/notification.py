@@ -17,9 +17,14 @@ NOTIFICATION_TYPES = (
     "converted",       # 需求转 BUG
     # 【ticket-document-management §2.5】文档被上传 / 绑定 / 改版。因 NotificationPreference
     # 采用「无行 = 开启」，存量用户**零回填**即自动收到该类通知。
-    # 下游 services/notification_prefs.py 与 routes/me.py 都**从本元组派生**，无需改动；
-    # 唯一需要手改的是前端镜像 components/settings/NotificationPrefsCard.tsx。
+    # 下游 services/notification_prefs.py 与 routes/me.py 都**从本元组派生**，无需改动。
     "document_added",
+    # 【self-service-registration §2.3 C-1】有人凭邀请码自助注册 → 通知全体有效管理员。
+    # 前端有**三处**镜像必须同步：lib/types.ts 的 NotificationType 联合与
+    # NOTIFICATION_TYPE_LIST、lib/constants.ts 的两个 Record<NotificationType,…> map、
+    # components/settings/NotificationPrefsCard.tsx（后者已改为从列表派生）。
+    # 三者的类型已收紧到「漏改一处即编译错误」，npm run typecheck 是它们的机器执行者。
+    "user_registered",
 )
 
 

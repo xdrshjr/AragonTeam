@@ -130,6 +130,17 @@ def create_app(config_class=Config):
                 app.logger.info("released stale agent locks: %s", ", ".join(released))
         if app.config.get("SEED_ON_STARTUP", True):
             seed_if_empty()
+        # 【self-service-registration §2.1 A-3】**必须排在 seed 之后**：seed 的幂等判据是
+        # `User.query.count() == 0`，先建根管理员会让全新库上 users 恒非空，示例项目 /
+        # 需求 / BUG / 评论一行都不写入，「首次启动开箱有内容」当场失效（§7 R-4）。
+        # 放在 seed 之后，全新库的时序是：seed 建出 admin → bootstrap 认领同名账号 →
+        # 只打 is_root 标 → 默认配置下与本轮之前的行为逐字相同。
+        if app.config.get("ROOT_ADMIN_BOOTSTRAP", True):
+            from services import bootstrap
+
+            result = bootstrap.ensure_root_admin(app)
+            app.logger.info("root admin ensured: %s (%s)",
+                            result["username"], result["action"])
 
     return app
 

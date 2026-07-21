@@ -458,3 +458,31 @@ def test_purge_never_deletes_real_documents(file_app, monkeypatch, capsys):
         assert DocumentVersion.query.filter_by(document_id=doc_id).count() == 1
         # 上传者被 documents.uploader_id 这条**真外键**保护，不会被误删。
         assert db.session.get(User, uploader_id) is not None
+
+
+# —— self-service-registration §7 R-9：根管理员是治理锚点，清理工具永不碰它 ——
+
+def test_apply_never_deletes_root_user(legacy_db, monkeypatch, file_app):
+    """seed 出来的 `admin` 行既登记了 SeedRecord、又是根管理员——删掉它就是治理死锁。
+
+    「清完演示数据后没有人能登录」在产品内无恢复路径，只剩改配置 + 重启。
+    """
+    db_path, url, _ids = legacy_db
+    make, _ = file_app
+    app = make(seed=False)
+    with app.app_context():
+        alice = User.query.filter_by(username="alice").one()
+        alice.is_root = True                 # 模拟 ensure_root_admin 打过标的那一行
+        db.session.commit()
+        alice_id = alice.id
+        db.session.remove()
+        db.engine.dispose()
+
+    # 退出码有意不断言：被跳过的行会让工具报「部分完成」，那正是本用例期望的结果。
+    _run_cli(monkeypatch, url, "--apply", "--no-backup")
+
+    app = make(seed=False)
+    with app.app_context():
+        survivor = db.session.get(User, alice_id)
+        assert survivor is not None
+        assert survivor.is_active is True     # 也不许被降级为「停用」

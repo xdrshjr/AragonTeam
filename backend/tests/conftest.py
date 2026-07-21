@@ -98,6 +98,13 @@ def file_app(tmp_path):
             "TESTING": True,
             # 同上：真实文件库的 app 也绝不允许写进 backend/var/uploads。
             "UPLOAD_DIR": str(tmp_path / "uploads"),
+            # 【self-service-registration §2.1 A-3′ 第 2 条】FileConfig 的基类是 **Config**
+            # 而不是 TestConfig，故 TestConfig 里那句 ROOT_ADMIN_BOOTSTRAP=False 管不到这里。
+            # 不关的话：test_purge_demo_data.py 的 legacy_db 先 make(seed=False) 建空库
+            # （bootstrap 就地建出 admin），随后 _install_legacy_principals() 再插一个同名
+            # admin → 撞 users.username 唯一索引 → 该文件 15 条用例集体炸。
+            # **必须放在 **overrides 之前**，好让用例显式打开它（如 test_root_admin.py）。
+            "ROOT_ADMIN_BOOTSTRAP": False,
             **overrides,                          # 如 RELEASE_STALE_LOCKS_ON_STARTUP=False
         }
         FileConfig = type("FileConfig", (Config,), attrs)
@@ -180,6 +187,30 @@ def disabled_user(app, data):
         user.is_active = False
         db.session.commit()
         return user.id
+
+
+@pytest.fixture
+def root_admin(app, data):
+    """把 fixture 里的 admin 提为根管理员并返回其 id（self-service-registration §2.1）。
+
+    走真实的 `ensure_root_admin` 而不是手改一行 is_root：本 fixture 服务于「成为根管理员
+    之后会发生什么」的用例，而 bootstrap 本身的幂等性与提权语义另有专门用例覆盖。
+    默认 `ROOT_ADMIN_USERNAME == "admin"`，恰好命中 fixture 里那个 admin。
+    """
+    from services import bootstrap
+
+    with app.app_context():
+        bootstrap.ensure_root_admin(app)
+        return data["admin_id"]
+
+
+@pytest.fixture
+def root_auth(client, root_admin):
+    """已提权为根管理员的 admin 的 Authorization 头。"""
+    username, password = CREDENTIALS["admin"]
+    r = client.post("/api/auth/login", json={"username": username, "password": password})
+    assert r.status_code == 200, r.get_json()
+    return {"Authorization": f"Bearer {r.get_json()['token']}"}
 
 
 @pytest.fixture

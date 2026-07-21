@@ -51,8 +51,10 @@ def test_adds_missing_column_to_existing_table(legacy_db):
 
     applied = schema_sync.sync_additive_columns(engine)
 
-    assert applied == ["users.is_active"]
-    assert "is_active" in _columns(engine, "users")
+    # 这份存量库缺 users 表的**全部** additive 列，故三条都应被补上
+    # （self-service-registration §5.2 新增 is_root / source）。
+    assert applied == ["users.is_active", "users.is_root", "users.source"]
+    assert {"is_active", "is_root", "source"} <= _columns(engine, "users")
 
 
 def test_existing_rows_default_to_active(legacy_db):
@@ -105,8 +107,49 @@ def test_additive_columns_cover_every_model_column(app):
     有人给模型加列却忘了登记进清单时，这条断言会先于存量库的全线 500 失败。
     """
     registered = {(table, column) for table, column, _ddl in schema_sync.ADDITIVE_COLUMNS}
-    # 内存库由 create_all 一次建全，故此处只校验清单本身指向真实存在的模型列——
-    # 反向（模型有列而清单没有）由本轮的人工登记 + CLAUDE.md 硬约束保证。
+    # 正向：清单里写的列必须真实存在于模型上。
+    # 反向由 test_every_model_column_is_creatable_or_registered 覆盖（见其 docstring）。
     for table_name, column_name in registered:
         table = db.metadata.tables[table_name]
         assert column_name in table.columns, f"{table_name}.{column_name} 不在模型里"
+
+
+# 「create_all 基线列」= 各表在**引入 schema_sync 之前**就已存在的列集合。它是一份
+# 有意冻结的快照：新加的列一律走 ADDITIVE_COLUMNS，故本清单**只减不增**——除非某张表
+# 是本轮全新建的（全新表由 create_all 一次建全，存量库上也不存在，无需补列）。
+_BASELINE_TABLES_CREATED_WHOLE = frozenset({
+    "agents", "requirements", "bugs", "activities", "comments", "notifications",
+    "notification_preferences", "seed_records", "documents", "document_versions",
+    "document_links", "app_settings",
+})
+_BASELINE_COLUMNS = {
+    "users": {"id", "username", "email", "password_hash", "role", "display_name",
+              "avatar_color", "created_at", "updated_at"},
+    "projects": {"id", "name", "key", "description", "owner_id",
+                 "created_at", "updated_at"},
+}
+
+
+def test_every_model_column_is_creatable_or_registered(app):
+    """§7 R-5 **反向**漂移守卫：模型列 ⊆ create_all 基线列 ∪ ADDITIVE_COLUMNS。
+
+    上面那条守卫是单向的（只查「清单里写的列存在吗」），漏登记一列时它**不会红**——
+    直到存量 aragon.db 上线后全线 `no such column` → 500。这条把缺口补上：给模型加了列
+    却忘了登记进 ADDITIVE_COLUMNS 时，它先于线上事故失败。
+
+    `documents.deleted_at` 这类「表虽在基线里、列却是后加的」情形同样被覆盖：
+    整表建全的表不在 _BASELINE_COLUMNS 里，其列一律要求出现在 ADDITIVE_COLUMNS
+    或——因为该表本身就是后来新建的——在 _BASELINE_TABLES_CREATED_WHOLE 里。
+    """
+    registered = {(table, column) for table, column, _ddl in schema_sync.ADDITIVE_COLUMNS}
+    for table_name, table in db.metadata.tables.items():
+        if table_name in _BASELINE_TABLES_CREATED_WHOLE:
+            continue
+        baseline = _BASELINE_COLUMNS.get(table_name)
+        assert baseline is not None, (
+            f"{table_name} 是新表：要么加进 _BASELINE_TABLES_CREATED_WHOLE（全新表，"
+            f"create_all 一次建全），要么在 _BASELINE_COLUMNS 里冻结它的基线列")
+        for column in table.columns:
+            assert column.name in baseline or (table_name, column.name) in registered, (
+                f"{table_name}.{column.name} 既不在 create_all 基线里，也没登记进 "
+                f"ADDITIVE_COLUMNS —— 存量库上它会让每一次查询 no such column（CLAUDE.md 硬约束）")

@@ -688,3 +688,122 @@ python backend/tools/purge_trash.py --apply --json  # 机器可读报告
 
 更多设计与评审细节见
 [`docs/plans/ticket-document-management/spec.md`](docs/plans/ticket-document-management/spec.md)。
+
+---
+
+## 自助注册与根管理员治理（Self-Service Registration）—— 谁能进这个系统，由配置和邀请码一起决定
+
+设计与评审全文见
+[`docs/plans/self-service-registration/spec.md`](plans/self-service-registration/spec.md)（v2，含 §0 评审记录）。
+
+### 一句话立场
+
+用户来源此前只有一条路径：管理员在「团队」页代建账号、把明文密码经 IM 发给本人。
+本轮把它拆成三根支柱——**邀请码门禁的自助注册**（谁都能自己进来，但得先有码）、
+**配置文件定义的根管理员**（永远有一个人进得来，且这条恢复路径不在库里）、
+**管理员的治理面**（人一多之后仍然看得清「这批人是谁、从哪来、还该不该留着」）。
+
+### 根管理员：配置文件是唯一真相
+
+`ROOT_ADMIN_USERNAME` / `ROOT_ADMIN_PASSWORD` 写在后端配置里，
+`services/bootstrap.py::ensure_root_admin` 每次启动幂等地保证这个账号存在、是 admin、
+是启用状态、带 `users.is_root` 标，并保证全库**至多一行**为真。它不可被降级 / 停用 /
+被他人重置密码（409，且响应体**不带 `allowed` 键**，不误伤看板拖拽的错误分流）。
+
+- **调用顺序不可换**：必须排在 `seed_if_empty()` **之后**。seed 的幂等判据是
+  `User.query.count() == 0`，先建根管理员会让全新库上 users 恒非空，示例项目 / 需求 /
+  BUG / 评论一行都不写入。默认配置下的时序是「seed 建出 `admin` → bootstrap 认领同一行 →
+  只打 `is_root` 标」，因此**全新库的开箱体验与本轮之前逐字相同**（users 仍然只有 1 行）。
+- **`ROOT_ADMIN_BOOTSTRAP` 有五个必须关闭的入口**：`TestConfig`、`tests/conftest.py::file_app`、
+  以及三个运维 CLI。`file_app` 的基类是 `Config` 而**不是** `TestConfig`——只关前者，
+  `test_purge_demo_data.py` 的空库上会先被建出一个 `admin`，随后撞上同名插入 →
+  唯一索引冲突 → 该文件 15 条用例集体炸；三个 CLI 还会往目标库里凭空写一个用户行，
+  直接违背 `purge_demo_data` 开篇「dry-run 绝不写库」的第一原则。
+- **忘密码只有一条恢复路径，四步顺序不可换**（README 有完整说明）：
+  设 `ROOT_ADMIN_SYNC_PASSWORD=true` → 重启 → 登录 → **先把 flag 设回 false 并再重启一次**，
+  之后才去改密码。颠倒最后两步，新密码会在下一次重启时被静默改回配置里的旧值。
+  该 flag 为真时**每次启动都打 warning**，就是为了让「登录完忘了关」在下一次重启就被发现。
+- **`ROOT_ADMIN_USERNAME` 是保留用户名**。`POST /auth/signup` 与 `POST /api/users`
+  共用 `app_settings.is_reserved_username`，响应体与普通重名 409 **逐字节相同**——
+  既堵住「抢注那个名字、等下次重启把自己变成不可降级的根管理员」，又不额外泄露
+  「这个名字是根管理员用户名」。提权既有账号时必打含 user id 的 warning。
+
+### 邀请码与自助注册
+
+- **一张键值表而不是逐个加列**：`app_settings` 是本轮唯一新增的表（`create_all` 自动建）。
+  本轮只需要三个设置项，但未来一定还有第四第五个；逐个加列意味着每次都要动 `schema_sync`。
+  代价是失去列级类型约束，故类型与业务约束全部收敛在 `services/app_settings.py`，
+  **路由层永远不直接读表**。
+- **不缓存**。每次注册请求打一次唯一索引查询。进程内缓存在多 worker 下必然失效不同步
+  （改了邀请码只有一个 worker 生效），是典型的「优化制造出的 bug」。
+- **邀请码明文存储**，这是有意识的取舍：根管理员必须能读回来才能发给同事，哈希存储会让
+  「查看当前邀请码」不可能实现。缓解是可随时一键 rotate（旧码**立即失效、无宽限期**）、
+  可关总开关、只有根管理员能读。
+- **`default_role` 无条件过 `SIGNUP_ROLES`（member/pm）白名单**，库内脏值与**配置兜底值**
+  一视同仁。`PATCH` 端点上的白名单只管住了「改设置」这条路径，管不住「全新库上
+  `app_settings` 为空、直接走配置兜底」——而后者恰恰是每次全新部署的常态。
+  少了这一步，`REGISTRATION_DEFAULT_ROLE=admin` 一个环境变量就能让任何拿到邀请码的人
+  注册即为管理员。
+- **口令强度只作用于 `/auth/signup`**。有意不套用到 `POST /api/users` 与
+  `POST /api/me/password`：那两条路径今天没有任何长度约束，存量测试里存在 6 位口令的用例，
+  收紧它们是一次破坏性变更。统一全站口令策略是明确的后续项。
+- **`/signup` 的 409 可用于枚举用户名**，有意接受：攻击者要先拿到邀请码，而把 409 换成
+  模糊错误会让真实用户在「换个名字重试」时完全失去反馈。
+
+### ⚠️ 反代部署必须设 `TRUST_PROXY_COUNT=1`
+
+本仓库自带 nginx 反代模板，而后端**没有** `ProxyFix`。那种部署下每个请求的
+`remote_addr` 恒为 `127.0.0.1`，注册限流会退化成**全站单桶**：一个人手滑几次就把全公司
+挡在注册门外，对真攻击者反而毫无作用（他就是那唯一的桶）。
+
+选「显式配置 + 从右往左取第 N 跳」而不是无脑接 `ProxyFix`：后者是全局中间件，一旦装上，
+**所有**读 `remote_addr` 的地方都无条件相信客户端可写的 `X-Forwarded-For`——直连部署下
+装它，等于把限流键的取值权交给攻击者。默认 0 = 一个转发头都不信，与本轮之前的行为逐字节相同。
+
+### 前端：让「漏改一处」变成编译错误
+
+新增通知类型 `user_registered` 时发现，前端的通知类型有**三处**镜像，其中两处漏改
+**不会**被 `npm run typecheck` 拦住：`NOTIFICATION_LABELS` / `NOTIFICATION_ICONS` 是
+`Record<string, string>`，取值函数还带 `|| type` 兜底，铃铛里只会显示英文原文 `user_registered`；
+`NotificationPrefsCard` 的 `TYPES` 是手写数组，漏加只会让用户永远关不掉这类通知。
+本轮把两个 map 收紧为 `Record<NotificationType, string>`、把 `TYPES` 改为从
+`lib/types.ts::NOTIFICATION_TYPE_LIST` 派生——这道门禁在通知链路上才第一次真正成立。
+收紧**有意不外扩**到 `STATUS_STYLES` / `ROLE_LABELS` / `ACTION_LABELS`，那是另一轮的清理。
+
+其余前端要点：登录页的 `DEMO_ACCOUNTS` 一键填充块（`admin` / `admin123`）**已删除**——
+它在任何真实部署里都是一个公开页面上的管理员后门；信息本身没丢，README 快速开始写明了
+默认账号来自 `ROOT_ADMIN_*`。团队页的数据层由 `swrFetcher` 整体换成 `listFetcher`
+（此前完全没有分页接线，靠 `limit=200` 硬扛），并**自建 SWR key**——绝不复用
+`USERS_KEY`，否则指派选择器会被筛选结果污染、突然只剩几个人。
+
+### 反向 schema 漂移守卫（本轮补上的一个假护栏）
+
+`test_schema_sync.py` 原有的守卫是**单向**的：它只遍历 `ADDITIVE_COLUMNS` 去查模型，
+所以「给模型加了列却忘了登记」**不会让任何用例变红**，直到存量库上线全线 `no such column`。
+本轮补上 `test_every_model_column_is_creatable_or_registered`：模型列 ⊆ 冻结的 create_all
+基线列 ∪ `ADDITIVE_COLUMNS`。CLAUDE.md 里那条硬约束第一次有了机器执行者。
+
+### 新增环境变量
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `ROOT_ADMIN_USERNAME` / `ROOT_ADMIN_PASSWORD` | `admin` / `admin123` | 根管理员账号，**生产必须覆盖密码** |
+| `ROOT_ADMIN_EMAIL` / `ROOT_ADMIN_DISPLAY_NAME` | `admin@aragon.dev` / `Ada（管理员）` | 展示信息 |
+| `ROOT_ADMIN_BOOTSTRAP` | `true` | 启动期保障开关；测试与三个运维 CLI 必须关 |
+| `ROOT_ADMIN_SYNC_PASSWORD` | `false` | 忘密码恢复开关，平时必须 false |
+| `REGISTRATION_ENABLED` / `REGISTRATION_INVITE_CODE` / `REGISTRATION_DEFAULT_ROLE` | `true` / `aragon` / `member` | 自助注册的**兜底默认值**，库内有行时以库为准 |
+| `SIGNUP_MAX_ATTEMPTS` | `10` | 单客户端 5 分钟内注册尝试上限（成功也计数） |
+| `TRUST_PROXY_COUNT` | `0` | 信任几层反代的 `X-Forwarded-For`；**反代部署必须置 1** |
+
+### 明确不做
+
+邮箱验证 / 找回密码（需要 SMTP）、注册审批队列（用「邀请码 + 可事后停用」达到同等治理
+效果，复杂度低一个数量级）、统一全站口令策略、多根管理员 / 组织级 RBAC 重构、
+SSO / OAuth / LDAP、分布式限流（`client_ip()` 只解决「反代下 IP 全都一样」，
+**不**解决「多 worker 各算各的」——那与既有 `/login` 限流是完全相同的已知缺口）。
+
+### 质量门禁
+
+- 后端：开工基线 `pytest -q --collect-only` = **597 条 / 39 个文件**；收工实测见下方提交说明。
+  判据是**相对的**：零失败 + 总数不低于基线。
+- 前端：`npm run typecheck` + `npm run build`，均零错误。

@@ -32,6 +32,12 @@ export const AGENTS_KEY = "/agents?limit=200";
  *  与各页共用同一个字面量。 */
 export const DOCUMENTS_KEY = "/documents";
 
+/** 公开注册元信息的唯一 SWR key（登录页与注册页共用；**不含邀请码**）。 */
+export const REGISTRATION_META_KEY = "/auth/registration-meta";
+
+/** 根管理员专属的注册设置 key（含明文邀请码，非根管理员一律 403）。 */
+export const REGISTRATION_SETTINGS_KEY = "/settings/registration";
+
 export class ApiError extends Error {
   status: number;
   detail?: unknown;

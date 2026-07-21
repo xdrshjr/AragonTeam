@@ -6,6 +6,11 @@ from extensions import db, utcnow
 # 角色枚举：与 §2.4 RBAC 一致。
 ROLES = ("admin", "pm", "member")
 
+# 账号来源（self-service-registration §2.1 A-2）。**仅供治理展示，不参与任何鉴权判定**——
+# 一旦有代码按 source 分配权限，它就从一条审计线索变成了第二套角色系统。
+# seed：首次启动的示例账号；admin：管理员代建；signup：凭邀请码自助注册；root：启动期兜底建出的根管理员。
+USER_SOURCES = ("seed", "admin", "signup", "root")
+
 
 class User(db.Model):
     __tablename__ = "users"
@@ -23,6 +28,12 @@ class User(db.Model):
     # 停用保留全部历史，只切断「能登录」与「能被指派」两种**面向未来**的能力。
     # 新增列必须同时登记进 services/schema_sync.py::ADDITIVE_COLUMNS，否则存量库必炸。
     is_active = db.Column(db.Boolean, nullable=False, default=True, server_default="1")
+    # 【self-service-registration §2.1 A-2】根管理员标记。全库**至多一行为真**，
+    # 由 services/bootstrap.py::ensure_root_admin 维护——配置文件是它的唯一真相。
+    is_root = db.Column(db.Boolean, nullable=False, default=False, server_default="0")
+    # 账号来源，取值见 USER_SOURCES。默认 'admin'：存量行确实都是管理员建的。
+    source = db.Column(db.String(16), nullable=False, default="admin",
+                       server_default="admin")
 
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=utcnow, onupdate=utcnow)
@@ -45,6 +56,11 @@ class User(db.Model):
             "avatar_color": self.avatar_color,
             # 【§2.5】additive：前端据此渲染「已停用」标记并从指派下拉里过滤。
             "is_active": bool(self.is_active),
+            # 【self-service-registration §2.1 A-2】additive：团队页据此渲染
+            # 「根管理员」/「自助注册」徽章并禁用危险操作。**summary() 有意不加这两项**：
+            # 指派选择器与时间线不关心谁是根管理员，多传只会让 AssigneeSummary 变胖。
+            "is_root": bool(self.is_root),
+            "source": self.source or "admin",
             "created_at": _iso(self.created_at),
             "updated_at": _iso(self.updated_at),
         }

@@ -180,6 +180,7 @@ def main(argv=None) -> int:
     os.environ["DATABASE_URL"] = url                        # 保护模块级 create_app()
     os.environ["SEED_ON_STARTUP"] = "false"                 # 清理工具绝不顺手播种
     os.environ["RELEASE_STALE_LOCKS_ON_STARTUP"] = "false"  # 清理不夹带运维副作用
+    os.environ["ROOT_ADMIN_BOOTSTRAP"] = "false"            # 只读/只删工具不写用户表
     from app import create_app                             # ← 必须在这之后 import
 
     gc_config = type("GcConfig", (Config,), {
@@ -187,6 +188,8 @@ def main(argv=None) -> int:
         "UPLOAD_DIR": upload_dir,
         "SEED_ON_STARTUP": False,
         "RELEASE_STALE_LOCKS_ON_STARTUP": False,
+        # 【self-service-registration §2.1 A-3′ 第 5 条】同上：只读工具不写用户表。
+        "ROOT_ADMIN_BOOTSTRAP": False,
     })
     flask_app = create_app(gc_config)
     try:

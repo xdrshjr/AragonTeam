@@ -23,6 +23,12 @@ ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     # `deleted_by_id` 在模型侧同样**不建外键**——两条建表路径必须产出同一个 schema。
     ("documents", "deleted_at", "DATETIME"),
     ("documents", "deleted_by_id", "INTEGER"),
+    # self-service-registration §5.2：根管理员标记 + 账号来源。默认值都是常量
+    # （SQLite ADD COLUMN 的硬性要求），存量行零回填即获得正确语义：存量用户确实
+    # 都是管理员建的且都不是根管理员——直到 ensure_root_admin 在同一次启动的稍后
+    # 一步把那一行标起来。
+    ("users", "is_root", "BOOLEAN NOT NULL DEFAULT 0"),
+    ("users", "source", "VARCHAR(16) NOT NULL DEFAULT 'admin'"),
 ]
 
 

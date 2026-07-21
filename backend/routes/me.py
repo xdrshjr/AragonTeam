@@ -28,15 +28,15 @@ from models.bug import Bug
 from models.notification import NOTIFICATION_TYPES
 from services.auth_helpers import current_user
 from services import notification_prefs
-from services.validation import json_body, want_str
+from services.validation import json_body, want_email, want_str
 
 bp = Blueprint("me", __name__, url_prefix="/api/me")
 
 # 「我的工作」各分区兜底上限，防单人海量单撑爆响应（MVP 单机量级足够）。
 WORK_LIMIT = 100
 
-# 资料校验正则：邮箱务实匹配（含 @ 且有域名段）；头像底色严格 #RRGGBB。
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# 头像底色严格 #RRGGBB。邮箱校验已下沉到 services/validation.py::want_email
+# （self-service-registration 评审 P0-1：三条改资料 / 注册路径共用同一份规则）。
 _COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 # 密码长度区间（§6.2）。
@@ -100,13 +100,9 @@ def _apply_profile(user, data) -> str | None:
             return "display_name must be 1..128 chars"
         user.display_name = name
     if "email" in data:
-        email = "" if data.get("email") is None else str(data.get("email")).strip()
-        if email == "":
-            user.email = None  # 空串视为清空（§6.1 / R5）。
-        elif len(email) > 255 or not _EMAIL_RE.match(email):
-            return "invalid email"
-        else:
-            user.email = email
+        # 空串 / null 视为清空（§6.1 / R5）；非串 / 超长 / 格式非法 → 400（want_email 抛，
+        # 由全局处理器渲染，与 POST /api/users、POST /auth/signup 同一水位）。
+        user.email = want_email(data)
     if "avatar_color" in data:
         color = want_str(data, "avatar_color")  # 非串 → 400（此前 _COLOR_RE.match 500）
         if not _COLOR_RE.match(color):
@@ -147,7 +143,7 @@ def change_password():
 @bp.get("/notification-preferences")
 @jwt_required()
 def get_notification_preferences():
-    """读有效偏好（§6.3）：6 类缺省全 true，被存量行覆盖。"""
+    """读有效偏好（§6.3）：全部通知类型缺省 true，被存量行覆盖。"""
     user = current_user()
     if user is None:
         return jsonify({"error": "unauthorized"}), 401

@@ -75,6 +75,64 @@ def want_query_int(field: str, *, default=None, minimum=None, maximum=None,
     return value
 
 
+def want_query_str(field: str, *, default=None, choices=None):
+    """从查询串取一个字符串，缺省 / 空串返回 default；不在 choices 内抛 QueryParamError（→ 400）。
+
+    「空串等价于不传」是全站列表筛选的既定语义（`?q=` 被清空时前端仍会带上这个键）。
+
+    Args:
+        field: 查询串参数名（同时用作错误体的 detail.field）。
+        default: 参数缺省 / 空串时的返回值。
+        choices: 合法取值集合；为 None 表示任意串（如自由文本 `?q=`）。
+
+    Returns:
+        str 或 default。
+
+    Raises:
+        QueryParamError: 给了 choices 且取值不在其中。
+    """
+    raw = request.args.get(field)
+    if raw is None:
+        return default
+    value = raw.strip()
+    if value == "":
+        return default
+    if choices is not None and value not in set(choices):
+        raise QueryParamError(field, raw, f"one of {sorted(set(choices))}")
+    return value
+
+
+_TRUE_LITERALS = ("true", "1")
+_FALSE_LITERALS = ("false", "0")
+
+
+def want_query_bool(field: str, *, default=None):
+    """从查询串取一个布尔值，接受 true/false/1/0（大小写不敏感）；其余取值一律 400。
+
+    **有意不做**「无法解析就当 False」的宽容处理：`?is_active=ture` 这样的手滑会静默
+    变成「只看已停用的人」，管理员据此以为团队里没人——错得无声无息，比 400 危险得多。
+
+    Args:
+        field: 查询串参数名。
+        default: 参数缺省 / 空串时的返回值。
+
+    Returns:
+        bool 或 default。
+
+    Raises:
+        QueryParamError: 取值不是可识别的布尔字面量。
+    """
+    raw = request.args.get(field)
+    if raw is None or raw.strip() == "":
+        return default
+    value = raw.strip().lower()
+    if value in _TRUE_LITERALS:
+        return True
+    if value in _FALSE_LITERALS:
+        return False
+    raise QueryParamError(field, raw, "one of ['0', '1', 'false', 'true']")
+
+
 def project_scope():
     """解析 `?project_id=`。返回 None（不过滤）/ UNASSIGNED / int。非法值抛 QueryParamError。"""
     if request.args.get("project_id") == UNASSIGNED:

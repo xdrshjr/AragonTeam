@@ -10,7 +10,11 @@ from models.notification_preference import NotificationPreference
 
 
 def effective_map(user_id: int) -> dict:
-    """6 类通知的有效开关：缺省 True，存量行覆盖。"""
+    """`NOTIFICATION_TYPES` 全部类型的有效开关：缺省 True，存量行覆盖。
+
+    **不写死类型条数**：本函数从元组派生，每轮新增通知类型时它自动跟随；写死数字
+    只会变成下一轮的僵尸注释（CLAUDE.md §四）。
+    """
     stored = {p.type: p.enabled
               for p in NotificationPreference.query.filter_by(user_id=user_id).all()}
     return {t: stored.get(t, True) for t in NOTIFICATION_TYPES}

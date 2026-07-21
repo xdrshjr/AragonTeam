@@ -7,13 +7,46 @@
 【R-03 测试隔离】存储**不用**裸模块级全局字典（否则跨用例不复位、429 断言顺序
 敏感）：挂到 `app.extensions["ratelimit"]` 上，随每个测试 app 实例自然重建；
 另提供 reset() 供 conftest autouse fixture 兜底复位。
+
+【self-service-registration §2.2 B-2】本模块也被 `/auth/signup` 用作**通用事件计数器**：
+那里成功与失败都调 `record_failure`（要挡的既是暴力猜邀请码，也是批量注册）。函数名
+沿用不改——它是稳定 API，改名等同破坏性变更（CLAUDE.md §五）。
 """
 import time
 
-from flask import current_app
+from flask import current_app, request
 
 # 滑动窗口宽度（秒）。
 WINDOW_SECONDS = 300
+
+
+def client_ip() -> str:
+    """限流用的客户端标识。**默认与 `request.remote_addr` 逐字节相同**。
+
+    【为什么不直接接 werkzeug 的 ProxyFix】ProxyFix 是全局中间件，一旦装上，**所有**读
+    remote_addr 的地方都无条件相信 `X-Forwarded-For`。而这个头是客户端可写的：直连部署下
+    装它，等于把限流键的取值权交给攻击者，每个请求换一个伪造 IP 即可绕过限流。故改为
+    显式配置 + 只在服务端可控的那几跳上取值（self-service-registration §2.2 B-2′ / R-14）。
+
+    - `TRUST_PROXY_COUNT = 0`（默认）：直接返回 remote_addr，**不看任何转发头**。
+    - `TRUST_PROXY_COUNT = N > 0`：取 `X-Forwarded-For` 列表**从右往左**第 N 个
+      （右端是最靠近服务端、最不可伪造的一跳）；列表长度不足或头缺失则回落 remote_addr。
+
+    【部署提醒】本仓库自带 nginx 反代模板（`ops/templates/aragonteam-nginx-http`），
+    那种部署下 remote_addr 恒为 127.0.0.1，限流会退化成**全站单桶**；此时必须置 1。
+
+    Returns:
+        非空字符串；完全取不到时返回 "unknown"（与既有 login 的兜底逐字相同）。
+    """
+    fallback = request.remote_addr or "unknown"
+    trusted = current_app.config.get("TRUST_PROXY_COUNT", 0) or 0
+    if trusted <= 0:
+        return fallback
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    hops = [h.strip() for h in forwarded.split(",") if h.strip()]
+    if len(hops) < trusted:
+        return fallback
+    return hops[-trusted]
 
 
 def _store() -> dict:

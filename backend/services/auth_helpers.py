@@ -55,6 +55,30 @@ def require_role(*roles):
     return decorator
 
 
+def require_root():
+    """要求当前用户是**根管理员**（is_root），否则 403。隐含要求已登录（jwt）。
+
+    与 `require_role` 形状一致：以库内字段为准（二次查库），不信任任何 JWT claim——
+    is_root 从不写进 token，一个在签发之后才被清标的账号必须立刻失去这项能力
+    （self-service-registration §2.4）。
+    """
+    def decorator(fn):
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            verify_jwt_in_request()
+            user = current_user()
+            if user is None:
+                return jsonify({"error": "unauthorized"}), 401
+            if not user.is_root:
+                return jsonify({
+                    "error": "forbidden",
+                    "detail": {"required": "root_admin", "your_role": user.role},
+                }), 403
+            return fn(*args, **kwargs)
+        return wrapper
+    return decorator
+
+
 def can_manage_ticket(user, ticket) -> bool:
     """行级 RBAC 裁决（Phase-3 §2.4）。
 

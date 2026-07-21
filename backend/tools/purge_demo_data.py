@@ -385,7 +385,12 @@ def _purge_users(rows: list) -> tuple:
 
     `users.id` 被 reporter_id / owner_id 真外键引用且 `PRAGMA foreign_keys=ON`，
     硬删必 IntegrityError；且删干净就等于销毁审计轨迹，与平台核心价值直接冲突。
-    故：末任管理员守卫 → 仍被引用则**停用**而非删除 → 都不满足才真删。
+    故：**根管理员守卫** → 末任管理员守卫 → 仍被引用则**停用**而非删除 → 都不满足才真删。
+
+    根管理员守卫排在最前（self-service-registration §7 R-9）：全新库上的 seed `admin`
+    行既登记了 SeedRecord、又在同一次启动里被 `ensure_root_admin` 认领成了根管理员。
+    删掉它 = 清完演示数据后没有人能登录，且产品内无恢复路径（只剩改配置 + 重启）。
+    停用它同样不行——根管理员恒为 active 是 §2.1 A-4 的不变量。
 
     Returns:
         `(deleted, deactivated, skipped)` 三个列表，元素均为可 JSON 序列化的 dict。
@@ -395,6 +400,10 @@ def _purge_users(rows: list) -> tuple:
 
     deleted, deactivated, skipped = [], [], []
     for user in rows:
+        if lifecycle.is_protected_root(user):
+            skipped.append({"name": user.username, "id": user.id,
+                            "reason": "根管理员受保护（配置文件定义，删掉即治理死锁）"})
+            continue
         if lifecycle.would_orphan_admins(user, new_active=False):
             skipped.append({"name": user.username, "id": user.id,
                             "reason": "会让有效管理员归零（末任管理员不变量）"})
@@ -623,6 +632,7 @@ def main(argv=None) -> int:
     os.environ["DATABASE_URL"] = url                       # 保护模块级 create_app()
     os.environ["SEED_ON_STARTUP"] = "false"                # 清理工具绝不顺手播种
     os.environ["RELEASE_STALE_LOCKS_ON_STARTUP"] = "false"  # 清理不夹带运维副作用
+    os.environ["ROOT_ADMIN_BOOTSTRAP"] = "false"           # 只读/只删工具不写用户表
     from app import create_app                            # ← 必须在这之后 import
     from config import Config
 
@@ -630,6 +640,10 @@ def main(argv=None) -> int:
         "SQLALCHEMY_DATABASE_URI": url,
         "SEED_ON_STARTUP": False,
         "RELEASE_STALE_LOCKS_ON_STARTUP": False,
+        # 【self-service-registration §2.1 A-3′ 第 3 条】不关的话，本工具会在目标库里
+        # 凭空写出一个用户行——**dry-run 也会写**，直接违背本模块开篇「dry-run 绝不写库」
+        # 的第一原则。与上面两个开关是同一条理由。
+        "ROOT_ADMIN_BOOTSTRAP": False,
     })
     flask_app = create_app(purge_config)
     try:

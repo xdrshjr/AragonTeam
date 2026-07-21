@@ -3,7 +3,8 @@
 在 db.create_all() 之前必须先 import 全部模型，表才会注册到 metadata。
 app.py 通过 `import models` 触发本模块，从而一次性加载所有表定义。
 """
-from .user import User, ROLES
+from .user import User, ROLES, USER_SOURCES
+from .app_setting import AppSetting
 from .agent import Agent, AGENT_KINDS, AGENT_STATUSES
 from .project import Project
 from .requirement import Requirement, PRIORITIES, ASSIGNEE_TYPES
@@ -19,7 +20,9 @@ from .document import (
 from .document_link import DocumentLink, DOCUMENT_LINK_ENTITY_TYPES
 
 __all__ = [
-    "User", "ROLES",
+    "User", "ROLES", "USER_SOURCES",
+    # 【self-service-registration §3.2】import 行与本列表**两处都要登记**（同 Document 的教训）。
+    "AppSetting",
     "Agent", "AGENT_KINDS", "AGENT_STATUSES",
     "Project",
     "Requirement", "PRIORITIES", "ASSIGNEE_TYPES",

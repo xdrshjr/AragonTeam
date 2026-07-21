@@ -183,6 +183,37 @@ def notify_document(ticket, entity, document, actor, message=None):
         )
 
 
+def notify_user_registered(new_user) -> int:
+    """有人自助注册后 → 向全部**有效管理员**（role=admin 且 is_active）扇出一条通知。
+
+    Args:
+        new_user: 刚 flush 出 id、尚未 commit 的 User。
+
+    Returns:
+        实际发出的通知条数（供调用方与用例断言扇出范围）。
+
+    实现要点（每条对应一个真实失败模式）：
+    - `entity_type` / `entity_id` 传 None：这条通知不指向任何工单。前端
+      `NotificationBell.onOpenItem` 已有 `if (n.entity_type && n.entity_id != null)`
+      守卫，点击只标已读、不跳转（spec §7 R-6，本轮不改前端那处）。
+    - 收件人查询包在 `no_autoflush` 内：调用点处于「已 flush 新用户、尚未 commit」的
+      写事务中，与 `notify()` 内部既有的收敛同款。
+    - **不 commit**，沿用本模块既有约定（由调用方事务统一提交）。
+    - 「不给自己发」不变量天然成立：新用户角色恒 ∈ SIGNUP_ROLES，不含 admin。
+    """
+    with db.session.no_autoflush:
+        admins = User.query.filter(User.role == "admin",
+                                   User.is_active.is_(True)).all()
+    who = _short(new_user.display_name or new_user.username)
+    sent = 0
+    for admin in admins:
+        # message 必传：Notification.message 是 String(255) NOT NULL，notify 内部走 _clip。
+        if notify(admin.id, "user_registered", actor=("user", new_user.id),
+                  message=f"新用户 {who} 通过邀请码注册") is not None:
+            sent += 1
+    return sent
+
+
 def notify_mentions(comment, actor, ticket=None):
     """解析评论 body 中的 @username，向存在的用户各发一条 mentioned 通知（去重、排除自己）。
 

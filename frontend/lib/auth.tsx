@@ -11,12 +11,15 @@ import {
   ReactNode,
 } from "react";
 import { api, setToken, getToken, ApiError } from "@/lib/api";
-import type { User } from "@/lib/types";
+import type { SignupPayload, User } from "@/lib/types";
 
 interface AuthState {
   user: User | null;
   loading: boolean; // 初始会话复原中
   login: (username: string, password: string) => Promise<void>;
+  /** 自助注册并**直接登录**（self-service-registration §2.2 B-2）：
+   *  后端 201 的响应体与 /auth/login 的 200 完全同形，故落地逻辑与 login 逐行同构。 */
+  signup: (payload: SignupPayload) => Promise<void>;
   logout: () => void;
   refresh: () => Promise<void>;
   // 就地刷新登录态（如自助改资料后），免一次 /auth/me 往返（account-settings §7）。
@@ -73,6 +76,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(user);
   }, []);
 
+  // 与上面的 login 逐行同构：拿到 {token, user} → 写 token → 写登录态。
+  // 失败一律向上抛 ApiError，由表单按 status / detail.field 渲染**字段级**错误
+  // （403 邀请码错误必须落在邀请码字段下方，而不是一个无处着落的 toast）。
+  const signup = useCallback(async (payload: SignupPayload) => {
+    const { token, user } = await api.post<{ token: string; user: User }>(
+      "/auth/signup",
+      payload
+    );
+    setToken(token);
+    setUser(user);
+  }, []);
+
   const logout = useCallback(() => {
     setToken(null);
     setUser(null);
@@ -85,7 +100,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const applyUser = useCallback((u: User) => setUser(u), []);
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, refresh, applyUser }}>
+    <AuthContext.Provider
+      value={{ user, loading, login, signup, logout, refresh, applyUser }}
+    >
       {children}
     </AuthContext.Provider>
   );

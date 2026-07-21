@@ -9,6 +9,7 @@ import Avatar from "@/components/ui/Avatar";
 import ProfileCard from "@/components/settings/ProfileCard";
 import PasswordCard from "@/components/settings/PasswordCard";
 import NotificationPrefsCard from "@/components/settings/NotificationPrefsCard";
+import RegistrationCard from "@/components/settings/RegistrationCard";
 
 export default function SettingsPage() {
   const { user, logout } = useAuth();
@@ -51,6 +52,9 @@ export default function SettingsPage() {
           <ProfileCard />
           <PasswordCard />
           <NotificationPrefsCard />
+          {/* 站点级注册配置：**仅根管理员**可见（self-service-registration §2.3 C-4）。
+              普通 admin 连卡片都看不到，避免「看得见但一按就 403」的挫败感。 */}
+          {user?.is_root && <RegistrationCard />}
         </div>
       </main>
     </>

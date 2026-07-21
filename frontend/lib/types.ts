@@ -34,6 +34,9 @@ export interface AssigneeSummary {
   deleted?: boolean;
 }
 
+/** 账号来源（self-service-registration §2.1 A-2）。仅供治理展示，与权限无关。 */
+export type UserSource = "seed" | "admin" | "signup" | "root";
+
 export interface User {
   id: number;
   username: string;
@@ -43,6 +46,10 @@ export interface User {
   avatar_color: string | null;
   /** false = 已停用：不能登录、既有 token 立即失效、不出现在指派选择器（§2.5）。 */
   is_active: boolean;
+  /** true = 根管理员：由后端配置文件（ROOT_ADMIN_*）定义，不可降级 / 停用 / 被他人改密。 */
+  is_root: boolean;
+  /** 账号来源，仅供治理展示，**不参与任何前端鉴权判断**。 */
+  source: UserSource;
   created_at: string;
   updated_at: string;
 }
@@ -214,7 +221,27 @@ export type NotificationType =
   | "status_changed"
   | "agent_advanced"
   | "converted"
-  | "document_added";
+  | "document_added"
+  | "user_registered";
+
+/**
+ * `NotificationType` 的**运行时**镜像（self-service-registration §2.3 C-1 / R-17）。
+ *
+ * 与联合类型放在一起维护，是为了让「新增一个类型」只有一个地方需要看。下游
+ * `NOTIFICATION_LABELS` / `NOTIFICATION_ICONS` 已收紧为 `Record<NotificationType, string>`，
+ * `NotificationPrefsCard` 直接遍历本列表——三者合起来让「漏改一处」成为**编译错误**，
+ * `npm run typecheck` 这道门禁在通知链路上才第一次真正成立。
+ */
+export const NOTIFICATION_TYPE_LIST: readonly NotificationType[] = [
+  "assigned",
+  "commented",
+  "mentioned",
+  "status_changed",
+  "agent_advanced",
+  "converted",
+  "document_added",
+  "user_registered",
+];
 
 export interface Notification {
   id: number;
@@ -340,6 +367,34 @@ export interface ProjectCreate {
   name: string;
   key: string;
   description?: string;
+}
+
+// —— self-service-registration：自助注册与站点级注册设置 ——
+
+/** POST /api/auth/signup 请求体（公开端点）；`display_name` 缺省时后端回退为 username。 */
+export interface SignupPayload {
+  username: string;
+  password: string;
+  invite_code: string;
+  display_name?: string;
+  email?: string;
+}
+
+/** `GET /auth/registration-meta` 的公开元信息——**不含邀请码**。 */
+export interface RegistrationMeta {
+  enabled: boolean;
+  invite_required: boolean;
+  password_min_length: number;
+}
+
+/** `GET/PATCH /settings/registration` 的响应；`invite_code` 明文，仅根管理员可读。 */
+export interface RegistrationSettings {
+  enabled: boolean;
+  invite_code: string;
+  default_role: Role;
+  allowed_default_roles: Role[];
+  updated_at: string | null;
+  updated_by: { id: number; name: string } | null;
 }
 
 // —— bulk-operations：需求 / BUG 批量操作 ——

@@ -163,9 +163,17 @@ function EditMemberForm({ user, onClose, onSaved }: SubProps & { user: User }) {
       <Input label="邮箱" type="email" value={email} onChange={(e) => setEmail(e.target.value)}
              placeholder="name@example.com" />
       <div className="flex flex-col gap-1.5">
+        {/* 【self-service-registration §2.3 C-3】根管理员的角色由后端配置文件锚定，
+            改它会得到 409。禁用 + 解释比让人点下去再吃一个错误诚实得多。 */}
         <Select label="角色" value={role} onChange={(e) => setRole(e.target.value as Role)}
-                options={ROLE_OPTIONS} disabled={isSelf} />
-        {isSelf && <span className="text-xs text-ink-muted">不能修改自己的角色</span>}
+                options={ROLE_OPTIONS} disabled={isSelf || user.is_root} />
+        {user.is_root ? (
+          <span className="text-xs text-ink-muted">
+            根管理员的角色由后端配置文件（<code>ROOT_ADMIN_*</code>）定义，不可修改
+          </span>
+        ) : (
+          isSelf && <span className="text-xs text-ink-muted">不能修改自己的角色</span>
+        )}
       </div>
       <FormActions onClose={onClose} onSubmit={onSubmit} submitting={submitting} submitLabel="保存" />
     </div>
@@ -191,6 +199,28 @@ function ResetPasswordForm({ user, onClose, onSaved }: SubProps & { user: User }
     } finally {
       setSubmitting(false);
     }
+  }
+
+  // 【self-service-registration §2.1 A-4】根管理员的密码只有他本人能改（走设置页的
+  // `POST /api/me/password`）。整个表单禁用并说明原因——而不是让人填完再吃一个 409。
+  if (user.is_root) {
+    return (
+      <div className="flex flex-col gap-4">
+        <p className="text-sm text-ink-muted">
+          <span className="font-medium text-ink">{user.display_name || user.username}</span>{" "}
+          是根管理员，其密码不能由他人重置。
+        </p>
+        <p className="text-sm text-ink-muted">
+          请由根管理员本人在「设置 → 修改密码」中更改；若已忘记密码，唯一的恢复路径是修改
+          后端配置（<code>ROOT_ADMIN_SYNC_PASSWORD</code>）并重启。
+        </p>
+        <div className="mt-1 flex justify-end">
+          <Button variant="ghost" onClick={onClose}>
+            知道了
+          </Button>
+        </div>
+      </div>
+    );
   }
 
   return (

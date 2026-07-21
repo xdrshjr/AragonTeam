@@ -56,7 +56,13 @@ copy .env.local.example .env.local
 npm run dev
 ```
 
-打开 <http://localhost:3000>，用默认账号 **`admin` / `admin123`** 登录。
+打开 <http://localhost:3000>。默认账号来自后端配置 `ROOT_ADMIN_*`，开发默认值是
+**`admin` / `admin123`**——这个账号是**根管理员**：它不可被降级 / 停用 / 被他人重置密码，
+也是「所有管理员都进不来」时唯一的破窗入口（改配置 + 重启）。**生产必须覆盖
+`ROOT_ADMIN_PASSWORD`。**
+
+新同事无需管理员代建账号：访问 <http://localhost:3000/register>，填对邀请码（默认 `aragon`）
+即可自助注册并直接登录。邀请码、注册开关与新用户默认角色由根管理员在「设置 → 注册配置」里管理。
 
 示例数据每类只有一条（1 账号 / 1 Agent / 1 项目 / 1 需求 / 1 BUG / 1 评论 / 1 审计 / 1 通知）。
 其余成员在「团队」页创建，需要 dev→qa 演示时在「Agents」页新建一个 `qa` Agent 即可。
@@ -90,8 +96,28 @@ AragonTeam/
 | `CORS_ORIGINS` | `http://localhost:3000` | 允许的前端 origin（逗号分隔） |
 | `AGENT_LLM_PROVIDER` / `AGENT_LLM_API_KEY` | `none` / 空 | 设置后 Agent 由真实大模型驱动；留空即离线模式 |
 | `UPLOAD_DIR` | `<repo>/backend/var/uploads` | 文档 blob 根目录，**多机部署必须共享存储** |
+| `ROOT_ADMIN_USERNAME` / `ROOT_ADMIN_PASSWORD` | `admin` / `admin123` | 根管理员账号。**生产必须覆盖密码**；仍用默认值时启动日志会持续告警 |
+| `ROOT_ADMIN_EMAIL` / `ROOT_ADMIN_DISPLAY_NAME` | `admin@aragon.dev` / `Ada（管理员）` | 根管理员的展示信息 |
+| `ROOT_ADMIN_BOOTSTRAP` | `true` | 启动时幂等保障根管理员存在且归位。**运维 CLI 与测试环境必须关** |
+| `ROOT_ADMIN_SYNC_PASSWORD` | `false` | 忘密码时的恢复开关，见下方四步流程。**平时必须为 false** |
+| `REGISTRATION_ENABLED` / `REGISTRATION_INVITE_CODE` | `true` / `aragon` | 自助注册的**兜底默认值**；库内 `app_settings` 有值时以库为准 |
+| `REGISTRATION_DEFAULT_ROLE` | `member` | 新注册用户的角色。**恒过 `member`/`pm` 白名单**，设成 `admin` 会被回落并告警 |
+| `SIGNUP_MAX_ATTEMPTS` | `10` | 单客户端 5 分钟内的注册尝试上限（成功也计数） |
+| `TRUST_PROXY_COUNT` | `0` | 信任几层反代的 `X-Forwarded-For`。**走 nginx 反代时必须置 1**，否则 `remote_addr` 恒为 `127.0.0.1`，注册限流退化成**全站单桶**（一个人手滑几次就把所有人挡在门外）。默认 0 = 不信任任何转发头，防伪造 |
 
 前端：`NEXT_PUBLIC_API_BASE`（默认 `http://localhost:5000/api`）。
+
+### 根管理员忘记密码怎么办
+
+唯一的恢复路径，**四步顺序不可换**：
+
+1. 设 `ROOT_ADMIN_SYNC_PASSWORD=true`；
+2. 重启（此刻库内口令被重置为 `ROOT_ADMIN_PASSWORD` 的值）；
+3. 用该口令登录；
+4. **先把 flag 设回 `false` 并再重启一次**，之后才去「设置」页改新密码。
+
+把第 4 步的两半颠倒（先改密码、后关 flag），新密码会在下一次重启时被静默改回配置里的旧值。
+该 flag 为真时每次启动都会打一条 warning，就是为了让人不会忘记关掉它。
 
 完整变量表见 [`docs/iterations.md`](docs/iterations.md)。
 

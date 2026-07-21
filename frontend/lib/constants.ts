@@ -5,8 +5,10 @@ import type {
   RequirementStatus,
   BugStatus,
   DocumentKind,
+  NotificationType,
   Priority,
   Severity,
+  UserSource,
 } from "@/lib/types";
 
 // 徽章配色（浅底 + 深字），符合 Anthropic 暖色浅色风。
@@ -137,7 +139,13 @@ export function authorStyle(type: string): AuthorStyle {
 }
 
 // —— Phase-3：通知类型中文名 + 图标（emoji，零依赖）——
-export const NOTIFICATION_LABELS: Record<string, string> = {
+//
+// 【self-service-registration §2.3 C-1 / R-17】两个 map 的类型由 `Record<string, string>`
+// 收紧为 `Record<NotificationType, string>`。这是**纯类型收紧，运行时零变化**，但它把
+// 「后端加了一个通知类型、前端忘了加标签」从「铃铛里显示英文原文 user_registered + 🔔，
+// 而 typecheck 一路绿灯」变成了一个编译错误。收紧**有意不外扩**到 STATUS_STYLES /
+// ROLE_LABELS / ACTION_LABELS（它们同样是 Record<string, …>）——那是另一轮的清理。
+export const NOTIFICATION_LABELS: Record<NotificationType, string> = {
   assigned: "指派",
   commented: "评论",
   mentioned: "提及",
@@ -145,9 +153,10 @@ export const NOTIFICATION_LABELS: Record<string, string> = {
   agent_advanced: "Agent 推进",
   converted: "转 BUG",
   document_added: "文档",
+  user_registered: "新成员注册",
 };
 
-export const NOTIFICATION_ICONS: Record<string, string> = {
+export const NOTIFICATION_ICONS: Record<NotificationType, string> = {
   assigned: "📌",
   commented: "💬",
   mentioned: "@",
@@ -155,15 +164,29 @@ export const NOTIFICATION_ICONS: Record<string, string> = {
   agent_advanced: "🤖",
   converted: "🐞",
   document_added: "📎",
+  user_registered: "🎉",
 };
 
-export function notificationLabel(type: string): string {
+// 形参收紧为 NotificationType（不再是 string）：两个 map 现在对该联合是**全覆盖**的，
+// 编译期不可能取不到值。运行时兜底只为一种情形保留——后端比这份 bundle 新，
+// 推来了一个前端还不认识的类型。
+export function notificationLabel(type: NotificationType): string {
   return NOTIFICATION_LABELS[type] || type;
 }
 
-export function notificationIcon(type: string): string {
+export function notificationIcon(type: NotificationType): string {
   return NOTIFICATION_ICONS[type] || "🔔";
 }
+
+// —— self-service-registration §2.3 C-3：账号来源的中文名（团队页徽章）——
+// `admin` / `seed` 有意**不渲染徽章**（那是绝大多数行，标了等于没标），
+// 但标签仍然给全，好让筛选器的下拉与徽章共用同一份文案。
+export const USER_SOURCE_LABELS: Record<UserSource, string> = {
+  seed: "示例数据",
+  admin: "管理员创建",
+  signup: "自助注册",
+  root: "根管理员",
+};
 
 // —— mention-autocomplete：评论正文 @提及渲染切分 ——
 // 时间线渲染用：把评论正文里的 @token 标为 chip；字符集与后端解析口径一致。

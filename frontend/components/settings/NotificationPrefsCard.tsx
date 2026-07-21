@@ -5,21 +5,12 @@ import { NOTIFICATION_LABELS, NOTIFICATION_ICONS } from "@/lib/constants";
 import { useToast } from "@/lib/toast";
 import Toggle from "@/components/ui/Toggle";
 import ErrorState from "@/components/ui/ErrorState";
-import type { NotificationType } from "@/lib/types";
+import { NOTIFICATION_TYPE_LIST, type NotificationType } from "@/lib/types";
 
-// 各类通知的展示顺序（与后端 models/notification.py::NOTIFICATION_TYPES 一致）。
-// 【ticket-document-management §2.5 / 评审 R21】本列表是那个常量在前端的**手写镜像**：
-// 后端的 notification_prefs.py 与 routes/me.py 都是从常量派生的、无需改动，唯独这里
-// 不加就不会出现在设置页的开关列表里——新类型会变成一个用户永远关不掉的通知。
-const TYPES: NotificationType[] = [
-  "assigned",
-  "commented",
-  "mentioned",
-  "status_changed",
-  "agent_advanced",
-  "converted",
-  "document_added",
-];
+// 各类通知的展示顺序 = `NOTIFICATION_TYPE_LIST`（lib/types.ts，与联合类型同处维护）。
+// 【self-service-registration §2.3 C-1 / R-17】此处**曾是手写镜像**：漏加一项不会编译
+// 失败，只会让新类型变成一个用户永远关不掉的通知。改为从单一列表派生后，那种漏改
+// 已经不可能发生——列表和联合类型漂移会在 lib/types.ts 当场编译报错。
 
 // 通知偏好卡（account-settings §7）：逐类开关，拨动即乐观更新，失败自动回滚 + toast。
 export default function NotificationPrefsCard() {
@@ -46,7 +37,7 @@ export default function NotificationPrefsCard() {
         <ErrorState message="无法加载通知偏好" onRetry={() => refresh()} />
       ) : (
       <ul className="mt-5 divide-y divide-border">
-        {TYPES.map((type) => {
+        {NOTIFICATION_TYPE_LIST.map((type) => {
           const enabled = preferences?.[type] ?? true;
           return (
             <li key={type} className="flex items-center justify-between py-3">
