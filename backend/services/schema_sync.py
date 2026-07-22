@@ -38,6 +38,14 @@ ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("users", "last_login_at", "DATETIME"),
     ("users", "failed_login_count", "INTEGER NOT NULL DEFAULT 0"),
     ("users", "locked_until", "DATETIME"),
+    # version-plan-hierarchy §4.4：工单归属计划的两列。默认 NULL，存量行零回填即语义正确
+    # （存量工单确实「未归属任何计划」）。无 DB 外键 → DDL 为裸 INTEGER，与模型侧「不建 FK」
+    # 的两条建表路径产出同一 schema（同上面 documents.deleted_by_id 的考量）。**必须追加在
+    # 列表末尾**：sync_additive_columns 按列表顺序返回 applied，tests/test_schema_sync.py
+    # 断言的是那个列表的精确顺序。versions / plans **是新表、不进本清单**（这里只管「给已存在
+    # 的表加列」）。
+    ("requirements", "plan_id", "INTEGER"),
+    ("bugs", "plan_id", "INTEGER"),
 ]
 
 

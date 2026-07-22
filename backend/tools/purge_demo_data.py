@@ -41,8 +41,11 @@ LEGACY_FINGERPRINT = {
     ),
 }
 
-# 「有出身证明」的五类：只有它们适用「每类留一」（§2.6.1 步骤 4 / 评审 P0-1）。
-PROVENANCE_CATEGORIES = ("users", "agents", "projects", "requirements", "bugs")
+# 「有出身证明」的类别：只有它们适用「每类留一」（§2.6.1 步骤 4 / 评审 P0-1）。
+# 【version-plan-hierarchy §4.7】追加 versions / plans（全新实体，legacy 指纹为空）。
+# 顺序即报告展示顺序；真正的删除顺序由 _summarise_principals 按 FK 安全序编排。
+PROVENANCE_CATEGORIES = ("users", "agents", "projects", "versions", "plans",
+                         "requirements", "bugs")
 
 # 只清「登记 ∪ 级联 ∪ 孤儿」的三类软表（§2.6.2）。
 SOFT_TABLES = ("comments", "activities", "notifications")
@@ -152,18 +155,27 @@ def _prune_orphan_seed_records() -> int:
 
 
 def _entity_models() -> dict:
-    """SeedRecord.entity_type → 模型类。"""
+    """SeedRecord.entity_type → 模型类。
+
+    【version-plan-hierarchy §4.7 评审 P1-A（最易漏、后果最隐蔽的一条）】必须登记
+    version / plan：`_prune_orphan_seed_records` 用本映射的 `.get(entity_type)` 找模型，
+    **找不到即当孤儿删掉那条登记**——若不同步这里，版本 / 计划的 SeedRecord 会在首次
+    purge（含 dry-run 的计算阶段）被误判为孤儿删除，自毁出身证明，且工单行永远清不掉。
+    """
     from models.activity import Activity
     from models.agent import Agent
     from models.bug import Bug
     from models.comment import Comment
     from models.notification import Notification
+    from models.plan import Plan
     from models.project import Project
     from models.requirement import Requirement
     from models.user import User
+    from models.version import Version
 
     return {
         "user": User, "agent": Agent, "project": Project,
+        "version": Version, "plan": Plan,
         "requirement": Requirement, "bug": Bug, "comment": Comment,
         "activity": Activity, "notification": Notification,
     }
@@ -185,15 +197,22 @@ def _candidates(seeded: dict) -> dict:
 
     from models.agent import Agent
     from models.bug import Bug
+    from models.plan import Plan
     from models.project import Project
     from models.requirement import Requirement
     from models.user import User
+    from models.version import Version
 
     specs = (
         ("users", User, User.username, LEGACY_FINGERPRINT["user"], "user"),
         ("agents", Agent, Agent.name, LEGACY_FINGERPRINT["agent"], "agent"),
         ("projects", Project, Project.key,
          LEGACY_FINGERPRINT["project_key"], "project"),
+        # 【version-plan-hierarchy §4.7】版本 / 计划是全新实体，存量库里根本不存在，
+        # 无历史指纹可言 → legacy 指纹为**空元组** `()`（column.in_(()) 恒假，候选集因此
+        # 只来自 seed_records 登记，语义正确）。故正常单 seed 场景下它们永远不会被删。
+        ("versions", Version, Version.name, (), "version"),
+        ("plans", Plan, Plan.name, (), "plan"),
         ("requirements", Requirement, Requirement.title,
          LEGACY_FINGERPRINT["requirement"], "requirement"),
         ("bugs", Bug, Bug.title, LEGACY_FINGERPRINT["bug"], "bug"),
@@ -351,6 +370,57 @@ def _purge_projects(rows: list) -> tuple:
     return deleted, skipped
 
 
+def _purge_plans(rows: list) -> tuple:
+    """删除候选计划；名下仍有工单则跳过并说明（version-plan-hierarchy §4.7）。
+
+    计划与工单无 DB 外键，删计划不触 IntegrityError，但守卫仍前置：避免留下指向已删
+    计划的悬挂 plan_id（保持数据自洽，与既有 DELETE /api/plans 语义一致）。守卫在工单
+    已删、且 _run 已 flush 之后求值——被删工单不再计入其名下计数。
+    """
+    from extensions import db
+    from services import lifecycle
+
+    deleted, skipped = [], []
+    for plan in rows:
+        refs = lifecycle.plan_references(plan.id)
+        if refs["requirements"] or refs["bugs"]:
+            skipped.append({
+                "name": plan.name, "id": plan.id,
+                "reason": (f"名下仍有工单（需求 {refs['requirements']} / "
+                           f"BUG {refs['bugs']}）"),
+            })
+            continue
+        deleted.append({"name": plan.name, "id": plan.id})
+        db.session.delete(plan)
+    db.session.flush()
+    return deleted, skipped
+
+
+def _purge_versions(rows: list) -> tuple:
+    """删除候选版本；名下仍有计划则跳过并说明（version-plan-hierarchy §4.7）。
+
+    必须排在 _purge_plans **之后**：`version.project_id` 是真外键，且 version_references
+    数的是名下计划——上一步已把候选计划删掉并 flush，故一个「计划都在删除集里」的版本
+    此刻计数归零、可安全删除（同 _purge_agents 见「删除后的世界」的守卫时机）。
+    """
+    from extensions import db
+    from services import lifecycle
+
+    deleted, skipped = [], []
+    for version in rows:
+        refs = lifecycle.version_references(version.id)
+        if refs["plans"]:
+            skipped.append({
+                "name": version.name, "id": version.id,
+                "reason": f"名下仍有计划（{refs['plans']}）",
+            })
+            continue
+        deleted.append({"name": version.name, "id": version.id})
+        db.session.delete(version)
+    db.session.flush()
+    return deleted, skipped
+
+
 def _user_references(user_id: int) -> int:
     """该用户仍被多少行引用（reporter / owner / 作者 / 施动者 / 收件人）。
 
@@ -503,6 +573,13 @@ def _summarise_principals(keeps: dict, removals: dict) -> dict:
         summary[category] = _category_entry(
             keeps[category],
             [{"name": row.title, "id": row.id} for row in removals[category]])
+    # 【version-plan-hierarchy §4.7】FK 安全顺序：工单（_run 已删）→ 计划 → 版本 → 项目
+    # → Agent → 用户。计划先于版本（plan.version_id/plan.project_id 是真外键），版本先于
+    # 项目（version.project_id 是真外键）。
+    deleted, skipped = _purge_plans(removals["plans"])
+    summary["plans"] = _category_entry(keeps["plans"], deleted, skipped=skipped)
+    deleted, skipped = _purge_versions(removals["versions"])
+    summary["versions"] = _category_entry(keeps["versions"], deleted, skipped=skipped)
     deleted, skipped = _purge_projects(removals["projects"])
     summary["projects"] = _category_entry(keeps["projects"], deleted, skipped=skipped)
     deleted, skipped = _purge_agents(removals["agents"])
@@ -545,13 +622,16 @@ def _untouched_counts() -> dict:
     from models.document import Document, DocumentVersion
     from models.document_link import DocumentLink
     from models.notification import Notification
+    from models.plan import Plan
     from models.project import Project
     from models.requirement import Requirement
     from models.user import User
+    from models.version import Version
 
     # 文档三表**从不被本工具清理**（seed 不写文档行，故它们全部是用户真实数据）；
     # 列在这里是为了让操作者能核对「我传的文件确实还在」。
     models = (("users", User), ("agents", Agent), ("projects", Project),
+              ("versions", Version), ("plans", Plan),
               ("requirements", Requirement), ("bugs", Bug),
               ("comments", Comment), ("activities", Activity),
               ("notifications", Notification),

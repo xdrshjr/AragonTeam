@@ -93,6 +93,23 @@ def is_terminal(entity: str, status: str) -> bool:
     return status in _TERMINAL.get(entity, set())
 
 
+def terminal_statuses(entity: str) -> set:
+    """该实体的终态集合（只读副本）。
+
+    【version-plan-hierarchy §3.4】计划 / 版本的进度计数用 `status.in_(terminal_statuses(...))`
+    统计「已完成」工单，须复用**这一份**终态清单而非内联第二份——后者会随邻接表漂移
+    （同 lifecycle.agent_open_workload 复用 is_terminal 的理由）。返回 `set` 的拷贝，
+    调用方误改也污染不到 `_TERMINAL`。
+
+    Args:
+        entity: "requirement" | "bug"。
+
+    Returns:
+        终态字符串集合（requirement→{"done"}、bug→{"closed"}）；未知实体返回空集。
+    """
+    return set(_TERMINAL.get(entity, set()))
+
+
 def columns(entity: str) -> list[tuple[str, str]]:
     """返回 [(key, 中文列名), ...] 有序列表，供看板分组。"""
     cols = _COLUMNS.get(entity)

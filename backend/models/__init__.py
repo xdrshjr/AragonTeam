@@ -7,6 +7,8 @@ from .user import User, ROLES, USER_SOURCES
 from .app_setting import AppSetting
 from .agent import Agent, AGENT_KINDS, AGENT_STATUSES
 from .project import Project
+from .version import Version, VERSION_STATUSES
+from .plan import Plan, PLAN_STATUSES
 from .requirement import Requirement, PRIORITIES, ASSIGNEE_TYPES
 from .bug import Bug, SEVERITIES
 from .activity import (
@@ -27,6 +29,10 @@ __all__ = [
     "AppSetting",
     "Agent", "AGENT_KINDS", "AGENT_STATUSES",
     "Project",
+    # 【version-plan-hierarchy §4.5】import 行与本列表**两处都要登记**（同 Document 的教训）：
+    # 漏前者表不进 metadata（create_all 建不出来），漏后者名字导不出。
+    "Version", "VERSION_STATUSES",
+    "Plan", "PLAN_STATUSES",
     "Requirement", "PRIORITIES", "ASSIGNEE_TYPES",
     "Bug", "SEVERITIES",
     # 【account-security-and-governance §3.2 / 评审 P2-3】新增的两个符号同样两处登记：

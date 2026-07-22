@@ -49,3 +49,15 @@ def test_invalid_status_and_entity():
     assert not workflow.is_valid_status("requirement", "nope")
     assert workflow.is_valid_status("requirement", "new")
     assert workflow.column_keys("bug") == ["open", "assigned", "fixing", "verifying", "closed"]
+
+
+def test_terminal_statuses_is_single_source(app):
+    """【version-plan-hierarchy §3.4】进度计数复用的终态单一真相。"""
+    from services import workflow as wf
+    assert wf.terminal_statuses("requirement") == {"done"}
+    assert wf.terminal_statuses("bug") == {"closed"}
+    assert wf.terminal_statuses("nope") == set()
+    # 返回副本：调用方误改污染不到内部 _TERMINAL。
+    borrowed = wf.terminal_statuses("requirement")
+    borrowed.add("assigned")
+    assert wf.terminal_statuses("requirement") == {"done"}

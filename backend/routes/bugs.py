@@ -14,7 +14,7 @@ from models.requirement import Requirement
 from models.user import User
 from models.agent import Agent
 from models.activity import Activity
-from services import workflow, bulk_ops, doc_policy, lifecycle, notifications
+from services import workflow, bulk_ops, doc_policy, hierarchy, lifecycle, notifications
 from services.documents import counts as document_counts
 from services.auth_helpers import (
     require_role, current_user, can_manage_ticket, forbidden,
@@ -36,6 +36,8 @@ bp = Blueprint("bugs", __name__, url_prefix="/api/bugs")
 def list_bugs():
     # 【§2.4】项目作用域：缺省=不过滤、整数=该项目、"none"=未归属（非法值 → 全局 400）。
     q = apply_project_filter(Bug.query, Bug, project_scope())
+    # 【version-plan-hierarchy §3.4】层级过滤：?version_id= / ?plan_id=（含 none 哨兵）。
+    q = hierarchy.apply_ticket_hierarchy_filter(q, Bug)
     status = request.args.get("status")
     assignee_type = request.args.get("assignee_type")
     # 【§2.9-G2 / 评审 R1】整数过滤参数走 want_query_int：畸形值 400、超界值不再 500。
@@ -65,7 +67,9 @@ def list_bugs():
     rows, total = paginate(q)
     # 【ticket-document-management §4.3】additive 富化 document_count（批量计数，
     # 在序列化站点完成，不改 to_dict）。
-    resp = jsonify(document_counts.with_document_counts("bug", rows))
+    # 【version-plan-hierarchy §3.4】再叠加只读 plan 概要（零 N+1）。
+    resp = jsonify(hierarchy.attach_plan_context(
+        document_counts.with_document_counts("bug", rows)))
     return with_total_count(resp, total), 200
 
 
@@ -111,12 +115,14 @@ def create_bug():
         reporter_id=reporter.id if reporter else None,
         position=_next_position(Bug, "open", project_id),
     )
+    # 【version-plan-hierarchy §3.2】可选 plan_id：校验 + 同项目不变量（同需求侧）。
+    hierarchy.resolve_plan_for_ticket(bug, data)
     db.session.add(bug)
     db.session.flush()
     Activity.log("bug", bug.id, "created", actor=_actor(),
                  to_status="open", message=f"创建 BUG「{title}」")
     db.session.commit()
-    return jsonify(bug.to_dict()), 201
+    return jsonify(hierarchy.with_plan_context_one(bug)), 201
 
 
 @bp.get("/<int:bug_id>")
@@ -125,7 +131,8 @@ def get_bug(bug_id):
     bug = db.session.get(Bug, bug_id)
     if bug is None:
         return jsonify({"error": "bug not found"}), 404
-    return jsonify(document_counts.with_document_count("bug", bug)), 200
+    return jsonify(hierarchy.attach_plan_context_one(
+        document_counts.with_document_count("bug", bug))), 200
 
 
 @bp.patch("/<int:bug_id>")
@@ -154,12 +161,16 @@ def patch_bug(bug_id):
     if "severity" in data:
         bug.severity = want_str(data, "severity", required=True, choices=SEVERITIES)
         changed = True
+    # 【version-plan-hierarchy §3.2】改归属计划（int 改 / null 解除）。
+    if "plan_id" in data:
+        hierarchy.resolve_plan_for_ticket(bug, data)
+        changed = True
     # §2.8-3：编辑进时间线。
     if changed:
         Activity.log("bug", bug.id, "updated", actor=_actor(),
                      to_status=bug.status, message="更新了 BUG 信息")
     db.session.commit()
-    return jsonify(bug.to_dict()), 200
+    return jsonify(hierarchy.with_plan_context_one(bug)), 200
 
 
 @bp.patch("/<int:bug_id>/assign")

@@ -404,3 +404,65 @@ def test_project_fixture_helpers_are_consistent(app, archived_project, disabled_
     with app.app_context():
         assert db.session.get(Project, archived_project).archived_at is not None
         assert db.session.get(User, disabled_user).is_active is False
+
+
+# ————————————————————— G. 版本 / 计划引用守卫（version-plan-hierarchy §3.5）—————————————————————
+
+def _make_version(client, auth, project_id):
+    return client.post("/api/versions", json={"name": "v1", "project_id": project_id},
+                       headers=auth("pm")).get_json()
+
+
+def _make_plan(client, auth, version_id):
+    return client.post("/api/plans", json={"name": "迭代 1", "version_id": version_id},
+                       headers=auth("pm")).get_json()
+
+
+def test_project_references_counts_versions(app, data):
+    """project_references 追加 versions 计数（删项目会触 versions 真外键）。"""
+    from services import lifecycle
+    with app.app_context():
+        refs = lifecycle.project_references(data["project_id"])
+        assert refs == {"requirements": 0, "bugs": 0, "versions": 0}
+
+
+def test_delete_project_with_version_conflicts(client, auth, data):
+    """有版本的项目不可删：否则 versions.project_id 真外键触 IntegrityError → 500。"""
+    _make_version(client, auth, data["project_id"])
+
+    r = client.delete(f"/api/projects/{data['project_id']}", headers=auth("admin"))
+
+    assert r.status_code == 409, r.get_json()
+    detail = r.get_json()["detail"]
+    assert detail["versions"] == 1
+    assert "archive" in detail["hint"]
+
+
+def test_version_references_and_conflict(app, client, auth, data):
+    from services import lifecycle
+    ver = _make_version(client, auth, data["project_id"])
+    _make_plan(client, auth, ver["id"])
+    with app.app_context():
+        refs = lifecycle.version_references(ver["id"])
+        assert refs == {"plans": 1}
+        body, status = lifecycle.conflict_version_has_plans(refs)
+        assert status == 409
+        payload = body.get_json()
+        assert payload["error"] == "version still has plans"
+        assert "allowed" not in payload            # 409 不带 allowed
+
+
+def test_plan_references_and_conflict(app, client, auth, data):
+    from services import lifecycle
+    pid = data["project_id"]
+    ver = _make_version(client, auth, pid)
+    plan = _make_plan(client, auth, ver["id"])
+    client.post("/api/requirements",
+                json={"title": "占计划", "project_id": pid, "plan_id": plan["id"]},
+                headers=auth("pm"))
+    with app.app_context():
+        refs = lifecycle.plan_references(plan["id"])
+        assert refs == {"requirements": 1, "bugs": 0}
+        body, status = lifecycle.conflict_plan_has_tickets(refs)
+        assert status == 409
+        assert "allowed" not in body.get_json()

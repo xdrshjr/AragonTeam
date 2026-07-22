@@ -9,14 +9,18 @@ from models.bug import Bug
 from models.comment import Comment
 from models.notification import Notification
 from models.notification_preference import NotificationPreference
+from models.plan import Plan
 from models.project import Project
 from models.requirement import Requirement
 from models.seed_record import SeedRecord
 from models.user import User
+from models.version import Version
 
 # (SeedRecord.entity_type, 模型) —— 登记类别与实体表的对应关系。
+# 【version-plan-hierarchy §4.6】seed 追加 1 版本 + 1 计划 → 每类仍恰好一条。
 _SEEDED = (
     ("user", User), ("agent", Agent), ("project", Project),
+    ("version", Version), ("plan", Plan),
     ("requirement", Requirement), ("bug", Bug), ("comment", Comment),
     ("activity", Activity), ("notification", Notification),
 )
@@ -44,11 +48,24 @@ def test_seed_ticket_is_unassigned_and_initial(file_app):
         assert bug.assignee_type is None and bug.assignee_id is None
 
 
+def test_seed_ticket_belongs_to_seed_plan(file_app):
+    """【version-plan-hierarchy §4.6】示例需求 / BUG 的 plan_id 指向示例计划。"""
+    make, _ = file_app
+    app = make()
+    with app.app_context():
+        version = Version.query.one()
+        plan = Plan.query.one()
+        assert plan.version_id == version.id
+        assert plan.project_id == version.project_id     # 反范式一致
+        assert Requirement.query.one().plan_id == plan.id
+        assert Bug.query.one().plan_id == plan.id
+
+
 def test_seed_registers_every_row(file_app):
     make, _ = file_app
     app = make()
     with app.app_context():
-        assert SeedRecord.query.count() == 8
+        assert SeedRecord.query.count() == 10
         for entity_type, model in _SEEDED:
             record = SeedRecord.query.filter_by(entity_type=entity_type).one()
             assert db.session.get(model, record.entity_id) is not None, entity_type

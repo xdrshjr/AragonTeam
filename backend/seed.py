@@ -18,6 +18,8 @@ from extensions import db
 from models.user import User
 from models.agent import Agent
 from models.project import Project
+from models.version import Version
+from models.plan import Plan
 from models.requirement import Requirement
 from models.bug import Bug
 from models.activity import Activity
@@ -28,7 +30,7 @@ from services import avatars
 
 
 def seed_if_empty():
-    """若 users 表为空则填充示例种子数据（每类 1 条，共 8 行）；否则跳过（幂等）。
+    """若 users 表为空则填充示例种子数据（每类 1 条，共 10 行）；否则跳过（幂等）。
 
     Returns:
         True 表示本次确实写入了种子数据；False 表示库非空、已跳过。
@@ -70,7 +72,20 @@ def seed_if_empty():
     db.session.add(project)
     db.session.flush()
 
-    # —— 示例需求 / 示例 BUG：一律初始状态且**未指派** ——
+    # —— 示例版本 + 示例计划（version-plan-hierarchy §4.6，守住「每类一条」）——
+    # 项目 → 版本 → 计划 → 需求/BUG 四层树的示例落点：让前端开箱即见完整层级。
+    version = Version(name="v1.0 首个可用版本", project_id=project.id, status="active",
+                      description="演示「版本 → 计划 → 需求/BUG」层级的首个版本。",
+                      owner_id=admin.id, position=0)
+    db.session.add(version)
+    db.session.flush()
+    plan = Plan(name="迭代 1：打通主流程", version_id=version.id, project_id=project.id,
+                status="active", description="第一轮迭代：把需求流转与 BUG 流转主链路跑通。",
+                position=0)
+    db.session.add(plan)
+    db.session.flush()
+
+    # —— 示例需求 / 示例 BUG：一律初始状态且**未指派**，并归属到示例计划 ——
     # 原 seed 把需求预置在 testing、把 BUG 预置在 fixing 并指派给 Agent，历史上多次
     # 造成「泊死单」（feature-completeness 与 scale-and-project-scope 两轮的救火）。
     # 未指派的 new/open 单既能演示全流程，又不可能一启动就卡住。
@@ -79,6 +94,7 @@ def seed_if_empty():
         description="这是一条示例需求，用于演示「新建 → 指派（人 / Agent）→ 开发 → 测试 →"
                     "审批 → 完成」的完整流转。可以直接拖动它，或删除后建自己的单。",
         status="new", priority="medium", project_id=project.id,
+        plan_id=plan.id,
         assignee_type=None, assignee_id=None,
         reporter_id=admin.id, position=0,
     )
@@ -89,6 +105,7 @@ def seed_if_empty():
         description="这是一条示例缺陷，用于演示「新建 → 指派 → 修复中 → 验证中 → 关闭」"
                     "的完整流转。可以直接拖动它，或删除后建自己的单。",
         status="open", severity="major", project_id=project.id,
+        plan_id=plan.id,
         assignee_type=None, assignee_id=None,
         related_requirement_id=None,
         reporter_id=admin.id, position=0,
@@ -129,6 +146,9 @@ def seed_if_empty():
 
     for entity_type, entity in (
         ("user", admin), ("agent", dev_agent), ("project", project),
+        # 【version-plan-hierarchy §4.6】版本 / 计划各登记一条：与 SEED_ENTITY_TYPES 及
+        # purge 的 _entity_models 一一对应，否则会变孤岛或被 purge 误判为孤儿删掉登记。
+        ("version", version), ("plan", plan),
         ("requirement", requirement), ("bug", bug), ("comment", comment),
         ("activity", activity), ("notification", notification),
     ):

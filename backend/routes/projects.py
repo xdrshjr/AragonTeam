@@ -142,7 +142,9 @@ def delete_project(project_id):
     if project is None:
         return jsonify({"error": "project not found"}), 404
     refs = lifecycle.project_references(project_id)
-    if refs["requirements"] or refs["bugs"]:
+    # 【version-plan-hierarchy §3.5】版本非空同样 409：versions.project_id 是真外键，
+    # 硬删会触 IntegrityError → 兜底 500，而非可操作的「还有 N 个版本」。
+    if refs["requirements"] or refs["bugs"] or refs["versions"]:
         return lifecycle.conflict_project_has_tickets(refs)
     # 【G3③】破坏性动作必须可回溯。Activity 现已承载 user / app_setting
     # （account-security-and-governance §2.3 C-1），但**项目 / Agent 的删除有意仍走

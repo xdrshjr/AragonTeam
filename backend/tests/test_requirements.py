@@ -131,3 +131,113 @@ def test_move_non_string_status_returns_400_not_500(client, auth, make_requireme
                      json={"status": ["assigned"]}, headers=auth("pm"))
     assert r.status_code == 400
     assert r.status_code != 500
+
+
+# ————————————————————— version-plan-hierarchy §8.1：需求归属计划 —————————————————————
+
+def _plan_for(client, auth, project_id):
+    """建一个版本 + 计划，返回 (version, plan) 两个 dict。"""
+    ver = client.post("/api/versions", json={"name": "v1", "project_id": project_id},
+                      headers=auth("pm")).get_json()
+    plan = client.post("/api/plans", json={"name": "迭代 1", "version_id": ver["id"]},
+                       headers=auth("pm")).get_json()
+    return ver, plan
+
+
+def test_create_requirement_with_plan_enriches_context(client, auth, data):
+    _ver, plan = _plan_for(client, auth, data["project_id"])
+    r = client.post("/api/requirements",
+                    json={"title": "带计划", "project_id": data["project_id"], "plan_id": plan["id"]},
+                    headers=auth("pm"))
+    assert r.status_code == 201, r.get_json()
+    body = r.get_json()
+    assert body["plan_id"] == plan["id"]
+    assert body["plan"]["name"] == "迭代 1"
+    assert body["plan"]["version_name"] == "v1"
+
+
+def test_create_requirement_without_project_adopts_plan_project(client, auth, data):
+    """无 project 的工单带 plan_id → 采纳计划的项目（§3.2）。"""
+    _ver, plan = _plan_for(client, auth, data["project_id"])
+    r = client.post("/api/requirements", json={"title": "无项目", "plan_id": plan["id"]},
+                    headers=auth("pm"))
+    assert r.status_code == 201, r.get_json()
+    assert r.get_json()["project_id"] == data["project_id"]
+
+
+def test_create_requirement_nonexistent_plan_400(client, auth, data):
+    r = client.post("/api/requirements",
+                    json={"title": "x", "project_id": data["project_id"], "plan_id": 999999},
+                    headers=auth("pm"))
+    assert r.status_code == 400
+    assert r.get_json()["detail"]["field"] == "plan_id"
+
+
+def test_create_requirement_cross_project_plan_400(client, auth, data):
+    _ver, plan = _plan_for(client, auth, data["project_id"])
+    other = client.post("/api/projects", json={"name": "另一个", "key": "OTH"},
+                        headers=auth("pm")).get_json()
+    r = client.post("/api/requirements",
+                    json={"title": "跨项目", "project_id": other["id"], "plan_id": plan["id"]},
+                    headers=auth("pm"))
+    assert r.status_code == 400
+    assert "same project" in r.get_json()["error"]
+
+
+def test_patch_requirement_sets_and_clears_plan(client, auth, data):
+    _ver, plan = _plan_for(client, auth, data["project_id"])
+    req = client.post("/api/requirements",
+                      json={"title": "改归属", "project_id": data["project_id"]},
+                      headers=auth("pm")).get_json()
+    assert req["plan_id"] is None
+
+    set_r = client.patch(f"/api/requirements/{req['id']}", json={"plan_id": plan["id"]},
+                         headers=auth("pm"))
+    assert set_r.status_code == 200
+    assert set_r.get_json()["plan_id"] == plan["id"]
+
+    clear_r = client.patch(f"/api/requirements/{req['id']}", json={"plan_id": None},
+                          headers=auth("pm"))
+    assert clear_r.status_code == 200
+    assert clear_r.get_json()["plan_id"] is None
+    assert clear_r.get_json()["plan"] is None
+
+
+def test_list_filters_by_plan_and_version(client, auth, data):
+    pid = data["project_id"]
+    ver, plan = _plan_for(client, auth, pid)
+    a = client.post("/api/requirements",
+                    json={"title": "归属", "project_id": pid, "plan_id": plan["id"]},
+                    headers=auth("pm")).get_json()
+    b = client.post("/api/requirements", json={"title": "未归属", "project_id": pid},
+                    headers=auth("pm")).get_json()
+
+    by_plan = [r["id"] for r in client.get(
+        f"/api/requirements?plan_id={plan['id']}", headers=auth("pm")).get_json()]
+    assert a["id"] in by_plan and b["id"] not in by_plan
+
+    by_version = [r["id"] for r in client.get(
+        f"/api/requirements?version_id={ver['id']}", headers=auth("pm")).get_json()]
+    assert a["id"] in by_version and b["id"] not in by_version
+
+    unassigned = [r["id"] for r in client.get(
+        "/api/requirements?plan_id=none", headers=auth("pm")).get_json()]
+    assert b["id"] in unassigned and a["id"] not in unassigned
+
+
+def test_convert_to_bug_inherits_plan(client, auth, data):
+    pid = data["project_id"]
+    _ver, plan = _plan_for(client, auth, pid)
+    req = client.post("/api/requirements",
+                      json={"title": "会转BUG", "project_id": pid, "plan_id": plan["id"]},
+                      headers=auth("pm")).get_json()
+    # 推到 testing 才能转 BUG：new→assigned→in_development→testing。
+    headers = auth("pm")
+    client.patch(f"/api/requirements/{req['id']}/assign",
+                 json={"assignee_type": "user", "assignee_id": data["member_id"]}, headers=headers)
+    for to in ("in_development", "testing"):
+        client.patch(f"/api/requirements/{req['id']}/move", json={"status": to}, headers=headers)
+
+    r = client.post(f"/api/requirements/{req['id']}/convert-to-bug", json={}, headers=headers)
+    assert r.status_code == 201, r.get_json()
+    assert r.get_json()["plan_id"] == plan["id"]     # 新 BUG 继承源需求 plan_id

@@ -23,7 +23,8 @@ from models.user import User
 from models.agent import Agent
 from models.activity import Activity
 from services import (
-    workflow, agent_runner, bulk_ops, doc_policy, lifecycle, notifications, positions,
+    workflow, agent_runner, bulk_ops, doc_policy, hierarchy, lifecycle,
+    notifications, positions,
 )
 from services.documents import counts as document_counts
 from services.auth_helpers import (
@@ -155,6 +156,9 @@ def list_requirements():
     # 【§2.4】项目作用域：缺省=不过滤、整数=该项目、"none"=未归属；非法值经全局
     # QueryParamError 处理器统一 400（本函数不写 try/except，见 §2.4①'）。
     q = apply_project_filter(Requirement.query, Requirement, project_scope())
+    # 【version-plan-hierarchy §3.4】层级过滤：?version_id= / ?plan_id=（含 none 哨兵），
+    # 与既有过滤 AND 叠加。畸形 / 超界值经全局 QueryParamError 处理器统一 400。
+    q = hierarchy.apply_ticket_hierarchy_filter(q, Requirement)
     status = request.args.get("status")
     assignee_type = request.args.get("assignee_type")
     # 【§2.9-G2 / 评审 R1】整数过滤参数一律走 want_query_int：畸形值不再被静默丢弃（→400），
@@ -186,7 +190,9 @@ def list_requirements():
     rows, total = paginate(q)
     # 【ticket-document-management §4.3】additive 富化 document_count：
     # 在**序列化站点**批量计数，不改 to_dict（否则 50 行就是 50 次子查询）。
-    resp = jsonify(document_counts.with_document_counts("requirement", rows))
+    # 【version-plan-hierarchy §3.4】再叠加只读 plan 概要（各一批查询、零 N+1）。
+    resp = jsonify(hierarchy.attach_plan_context(
+        document_counts.with_document_counts("requirement", rows)))
     return with_total_count(resp, total), 200
 
 
@@ -229,12 +235,15 @@ def create_requirement():
         reporter_id=reporter.id if reporter else None,
         position=_next_position(Requirement, "new", project_id),
     )
+    # 【version-plan-hierarchy §3.2】可选 plan_id：校验计划存在 + 同项目不变量（无项目工单
+    # 采纳计划的项目）。非法 / 跨项目 → ValidationError（400），路由不写 try/except。
+    hierarchy.resolve_plan_for_ticket(req, data)
     db.session.add(req)
     db.session.flush()  # 拿到 req.id 再写审计
     Activity.log("requirement", req.id, "created", actor=_actor(),
                  to_status="new", message=f"创建需求「{title}」")
     db.session.commit()
-    return jsonify(req.to_dict()), 201
+    return jsonify(hierarchy.with_plan_context_one(req)), 201
 
 
 @bp.get("/<int:req_id>")
@@ -243,7 +252,8 @@ def get_requirement(req_id):
     req = db.session.get(Requirement, req_id)
     if req is None:
         return jsonify({"error": "requirement not found"}), 404
-    return jsonify(document_counts.with_document_count("requirement", req)), 200
+    return jsonify(hierarchy.attach_plan_context_one(
+        document_counts.with_document_count("requirement", req))), 200
 
 
 @bp.patch("/<int:req_id>")
@@ -272,12 +282,16 @@ def patch_requirement(req_id):
     if "priority" in data:
         req.priority = want_str(data, "priority", required=True, choices=PRIORITIES)
         changed = True
+    # 【version-plan-hierarchy §3.2】改归属计划（int 改 / null 解除）；校验同上。
+    if "plan_id" in data:
+        hierarchy.resolve_plan_for_ticket(req, data)
+        changed = True
     # §2.8-3：编辑也进时间线，让 feed 覆盖全生命周期。
     if changed:
         Activity.log("requirement", req.id, "updated", actor=_actor(),
                      to_status=req.status, message="更新了需求信息")
     db.session.commit()
-    return jsonify(req.to_dict()), 200
+    return jsonify(hierarchy.with_plan_context_one(req)), 200
 
 
 @bp.delete("/<int:req_id>")
@@ -438,6 +452,8 @@ def convert_to_bug(req_id):
         status="open",
         project_id=req.project_id,
         related_requirement_id=req.id,
+        # 【version-plan-hierarchy §3.2】继承源需求的 plan_id，保持层级不断链。
+        plan_id=req.plan_id,
         reporter_id=reporter.id if reporter else None,
         position=_next_position(Bug, "open", req.project_id),
     )
@@ -456,7 +472,7 @@ def convert_to_bug(req_id):
     # 【Phase-3 §2.3】扇出：通知源需求 reporter / 人类 assignee。
     notifications.notify_convert(req, bug, actor=_actor())
     db.session.commit()
-    return jsonify(bug.to_dict()), 201
+    return jsonify(hierarchy.with_plan_context_one(bug)), 201
 
 
 # ————————————————————— Agent 协作运行时（Phase-2 支柱 A）—————————————————————

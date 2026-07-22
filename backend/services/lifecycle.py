@@ -19,8 +19,10 @@ from models.bug import Bug
 from models.comment import Comment
 from models.document_link import DocumentLink
 from models.notification import Notification
+from models.plan import Plan
 from models.requirement import Requirement
 from models.user import User
+from models.version import Version
 from services import notifications, workflow
 
 
@@ -99,18 +101,60 @@ def conflict_root_admin(reason: str):
 # ————————————————————— 引用守卫（§2.6 / §2.7）—————————————————————
 
 def project_references(project_id: int) -> dict:
-    """该项目名下的工单计数（任何状态都算——删项目会让它们失去归属）。"""
+    """该项目名下的工单与版本计数（任何状态都算——删项目会让它们失去归属）。
+
+    【version-plan-hierarchy §3.5】追加 `versions`：`versions.project_id` 是**真外键**，
+    删有版本的项目会触 IntegrityError → 兜底 500，用户看到「internal server error」而非
+    「还有 N 个版本」。计划被版本传递覆盖（有计划必有版本），故只需数版本。
+    """
     return {
         "requirements": Requirement.query.filter_by(project_id=project_id).count(),
         "bugs": Bug.query.filter_by(project_id=project_id).count(),
+        "versions": Version.query.filter_by(project_id=project_id).count(),
     }
 
 
 def conflict_project_has_tickets(refs: dict):
-    """项目仍有工单的 409 契约体（detail 带可操作计数与建议）。"""
+    """项目仍有工单 / 版本的 409 契约体（detail 带可操作计数与建议）。"""
     return jsonify({
         "error": "project still has tickets",
-        "detail": {**refs, "hint": "archive the project instead, or move its tickets"},
+        "detail": {**refs,
+                   "hint": "archive the project instead, or clear its versions and tickets"},
+    }), 409
+
+
+def version_references(version_id: int) -> dict:
+    """该版本名下的计划计数（version-plan-hierarchy §3.5）。删版本前须为空。"""
+    return {
+        "plans": Plan.query.filter_by(version_id=version_id).count(),
+    }
+
+
+def conflict_version_has_plans(refs: dict):
+    """版本仍有计划的 409 契约体（无 `allowed`，前端看板拖拽错误分流不得误伤）。"""
+    return jsonify({
+        "error": "version still has plans",
+        "detail": {**refs, "hint": "delete or archive its plans first"},
+    }), 409
+
+
+def plan_references(plan_id: int) -> dict:
+    """该计划名下的工单计数（version-plan-hierarchy §3.5）。
+
+    计划与工单**无 DB 外键**，删计划不会触 IntegrityError，但仍前置守卫：避免留下指向
+    已删计划的悬挂 `plan_id`（保持数据自洽）。
+    """
+    return {
+        "requirements": Requirement.query.filter_by(plan_id=plan_id).count(),
+        "bugs": Bug.query.filter_by(plan_id=plan_id).count(),
+    }
+
+
+def conflict_plan_has_tickets(refs: dict):
+    """计划仍有工单的 409 契约体（无 `allowed`）。"""
+    return jsonify({
+        "error": "plan still has tickets",
+        "detail": {**refs, "hint": "move its tickets to another plan or delete them first"},
     }), 409
 
 

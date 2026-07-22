@@ -7,7 +7,7 @@
 响应 shape **additive**：既有 `key` / `title` / `items` 一字不改，新增 `total` 与
 `truncated`——UI 据此在列头诚实地写出「显示 100 / 共 342」，绝不在用户不知情时少给数据。
 """
-from services import workflow
+from services import hierarchy, workflow
 from services.documents.counts import link_counts
 from services.scope import apply_project_filter, want_query_int
 
@@ -44,6 +44,8 @@ def column_page(model, entity: str, scope, column_limit: int) -> dict:
     columns = []
     for key, title in workflow.columns(entity):
         q = apply_project_filter(model.query.filter(model.status == key), model, scope)
+        # 【version-plan-hierarchy §3.4】看板列同样接 ?version_id= / ?plan_id= 过滤。
+        q = hierarchy.apply_ticket_hierarchy_filter(q, model)
         total = q.order_by(None).count()
         rows = q.order_by(model.position.asc(), model.id.asc()).limit(column_limit).all()
         columns.append({
@@ -59,11 +61,14 @@ def column_page(model, entity: str, scope, column_limit: int) -> dict:
     # ids 只含实际返回的行（本模块有 column_limit 截断）。
     visible_ids = [row.id for column in columns for row in column["rows"]]
     counts = link_counts(entity, visible_ids)
+    # 【version-plan-hierarchy §3.4】plan 概要跨全部列**一次**批量富化（零 N+1，同 counts）。
+    cards_by_id = {card["id"]: card for card in hierarchy.attach_plan_context(
+        [{**row.to_dict(), "document_count": counts.get(row.id, 0)}
+         for column in columns for row in column["rows"]])}
     return {"columns": [{
         "key": column["key"],
         "title": column["title"],
-        "items": [{**row.to_dict(), "document_count": counts.get(row.id, 0)}
-                  for row in column["rows"]],
+        "items": [cards_by_id[row.id] for row in column["rows"]],
         "total": column["total"],
         "truncated": column["truncated"],
     } for column in columns]}

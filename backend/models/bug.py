@@ -28,6 +28,9 @@ class Bug(db.Model):
     related_requirement_id = db.Column(
         db.Integer, db.ForeignKey("requirements.id"), nullable=True, index=True
     )
+    # 【version-plan-hierarchy §3.1 / §4.3】归属计划；NULL = 未归属。无 DB 外键，理由同
+    # requirements.plan_id（经 schema_sync 追加、只能 ADD COLUMN）。
+    plan_id = db.Column(db.Integer, nullable=True, index=True)
     position = db.Column(db.Integer, nullable=False, default=0)
 
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
@@ -49,6 +52,8 @@ class Bug(db.Model):
             "assignee": self.resolve_assignee(),
             "reporter_id": self.reporter_id,
             "related_requirement_id": self.related_requirement_id,
+            # 【version-plan-hierarchy §4.3】只输出 plan_id；`plan` 概要在序列化站点富化。
+            "plan_id": self.plan_id,
             "position": self.position,
             "created_at": _iso(self.created_at),
             "updated_at": _iso(self.updated_at),

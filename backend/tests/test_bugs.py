@@ -69,3 +69,64 @@ def test_list_default_order_by_recent_update(client, auth):
     ids = [x["id"] for x in items]
     assert ids[0] == a["id"]                    # 最近更新在最前
     assert ids == [a["id"], c["id"], b["id"]]   # updated_at desc, id desc
+
+
+# ————————————————————— version-plan-hierarchy §8.1：BUG 归属计划 —————————————————————
+
+def _plan_for(client, auth, project_id):
+    ver = client.post("/api/versions", json={"name": "v1", "project_id": project_id},
+                      headers=auth("pm")).get_json()
+    plan = client.post("/api/plans", json={"name": "迭代 1", "version_id": ver["id"]},
+                       headers=auth("pm")).get_json()
+    return ver, plan
+
+
+def test_create_bug_with_plan_enriches_context(client, auth, data):
+    _ver, plan = _plan_for(client, auth, data["project_id"])
+    r = client.post("/api/bugs",
+                    json={"title": "带计划的缺陷", "project_id": data["project_id"],
+                          "plan_id": plan["id"]}, headers=auth("pm"))
+    assert r.status_code == 201, r.get_json()
+    body = r.get_json()
+    assert body["plan_id"] == plan["id"]
+    assert body["plan"]["name"] == "迭代 1"
+    assert body["plan"]["version_name"] == "v1"
+
+
+def test_create_bug_nonexistent_plan_400(client, auth, data):
+    r = client.post("/api/bugs",
+                    json={"title": "x", "project_id": data["project_id"], "plan_id": 999999},
+                    headers=auth("pm"))
+    assert r.status_code == 400
+    assert r.get_json()["detail"]["field"] == "plan_id"
+
+
+def test_patch_bug_sets_and_clears_plan(client, auth, data):
+    _ver, plan = _plan_for(client, auth, data["project_id"])
+    bug = client.post("/api/bugs", json={"title": "改归属", "project_id": data["project_id"]},
+                      headers=auth("pm")).get_json()
+
+    set_r = client.patch(f"/api/bugs/{bug['id']}", json={"plan_id": plan["id"]}, headers=auth("pm"))
+    assert set_r.status_code == 200
+    assert set_r.get_json()["plan_id"] == plan["id"]
+
+    clear_r = client.patch(f"/api/bugs/{bug['id']}", json={"plan_id": None}, headers=auth("pm"))
+    assert clear_r.status_code == 200
+    assert clear_r.get_json()["plan_id"] is None
+
+
+def test_list_bugs_filter_by_version_and_none(client, auth, data):
+    pid = data["project_id"]
+    ver, plan = _plan_for(client, auth, pid)
+    a = client.post("/api/bugs", json={"title": "归属", "project_id": pid, "plan_id": plan["id"]},
+                    headers=auth("pm")).get_json()
+    b = client.post("/api/bugs", json={"title": "未归属", "project_id": pid},
+                    headers=auth("pm")).get_json()
+
+    by_version = [r["id"] for r in client.get(
+        f"/api/bugs?version_id={ver['id']}", headers=auth("pm")).get_json()]
+    assert a["id"] in by_version and b["id"] not in by_version
+
+    unassigned = [r["id"] for r in client.get(
+        "/api/bugs?version_id=none", headers=auth("pm")).get_json()]
+    assert b["id"] in unassigned and a["id"] not in unassigned

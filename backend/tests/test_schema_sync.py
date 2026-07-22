@@ -129,6 +129,9 @@ _BASELINE_TABLES_CREATED_WHOLE = frozenset({
     "agents", "requirements", "bugs", "activities", "comments", "notifications",
     "notification_preferences", "seed_records", "documents", "document_versions",
     "document_links", "app_settings",
+    # version-plan-hierarchy §4.4：versions / plans 是本轮全新表，create_all 一次建全，
+    # 存量库上也不存在（无需补列），故进本集合而非 _BASELINE_COLUMNS。
+    "versions", "plans",
 })
 _BASELINE_COLUMNS = {
     "users": {"id", "username", "email", "password_hash", "role", "display_name",

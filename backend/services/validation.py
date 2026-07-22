@@ -7,6 +7,7 @@
 错误统一走 400 JSON 契约 {error, detail:{field, expected}}，绝不 500。
 """
 import re
+from datetime import date
 from typing import Optional, Iterable
 
 from flask import request
@@ -141,6 +142,40 @@ def want_bool(data: dict, key: str, *, required: bool = False,
     if not isinstance(v, bool):
         raise ValidationError(f"{key} must be a boolean", field=key, expected="boolean")
     return v
+
+
+def want_date(data: dict, key: str) -> Optional[date]:
+    """从 data 取一个**可选**日期字段（`YYYY-MM-DD`）；非法 → 400；缺省 / 空串 → None。
+
+    【version-plan-hierarchy §6.4】版本 / 计划有 target_date / start_date / end_date 三个
+    DATE 字段。这是**请求体**侧的日期原语，与查询串侧的 `scope.want_query_datetime` 对偶
+    （边界模块归位，同 want_email 的理由）。**只服务 DATE，不服务 datetime**——`released_at`
+    是服务端托管的 DATETIME，不经请求体传入（§6.4 评审 P1-C），故本轮无需 datetime 请求体原语。
+
+    Args:
+        data: 已经过 json_body() 归一的 dict。
+        key: 字段名（同时用作错误体的 detail.field）。
+
+    Returns:
+        `datetime.date` 或 None（未提供 / 显式清空）。
+
+    Raises:
+        ValidationError: 非字符串 / 非 `YYYY-MM-DD` / 非法日期（如 2026-13-40）。
+    """
+    v = data.get(key, None)
+    if v is None:
+        return None
+    if not isinstance(v, str):
+        raise ValidationError(f"{key} must be a date string", field=key,
+                              expected="date (YYYY-MM-DD)")
+    v = v.strip()
+    if not v:
+        return None
+    try:
+        return date.fromisoformat(v)
+    except ValueError:
+        raise ValidationError(f"{key} is invalid", field=key,
+                              expected="date (YYYY-MM-DD)")
 
 
 def want_email(data: dict, key: str = "email") -> Optional[str]:

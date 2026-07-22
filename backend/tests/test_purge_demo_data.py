@@ -20,10 +20,12 @@ from models.agent import Agent
 from models.bug import Bug
 from models.comment import Comment
 from models.notification import Notification
+from models.plan import Plan
 from models.project import Project
 from models.requirement import Requirement
 from models.seed_record import SeedRecord
 from models.user import User
+from models.version import Version
 from tools import purge_demo_data as purge
 
 BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -486,3 +488,74 @@ def test_apply_never_deletes_root_user(legacy_db, monkeypatch, file_app):
         survivor = db.session.get(User, alice_id)
         assert survivor is not None
         assert survivor.is_active is True     # 也不许被降级为「停用」
+
+
+# ————————————————————— version-plan-hierarchy §4.7 评审 P1-A（放行条件 1）—————————————————————
+
+def test_purge_does_not_orphan_version_plan_seed_records(file_app, monkeypatch, capsys):
+    """版本 / 计划的 SeedRecord 不被 _prune_orphan_seed_records 误判为孤儿删除。
+
+    最易漏、后果最隐蔽的一条：若 purge 的 _entity_models 不登记 version/plan，它们的登记
+    会在首次 purge 被当孤儿删掉，自毁出身证明。单 seed 场景下版本 / 计划本身也必被「每类留一」保留。
+    """
+    make, db_path = file_app
+    app = make(seed=True)          # 完整 seed：含 1 版本 + 1 计划 + 各自 SeedRecord
+    with app.app_context():
+        assert SeedRecord.query.filter_by(entity_type="version").count() == 1
+        assert SeedRecord.query.filter_by(entity_type="plan").count() == 1
+    _release(app)
+
+    url = f"sqlite:///{db_path.as_posix()}"
+    _run_cli(monkeypatch, url, "--apply", "--no-backup")
+    capsys.readouterr()
+
+    verify = make(seed=False)
+    with verify.app_context():
+        # 登记未被误删。
+        assert SeedRecord.query.filter_by(entity_type="version").count() == 1
+        assert SeedRecord.query.filter_by(entity_type="plan").count() == 1
+        # 版本 / 计划本体被「每类留一」保留。
+        assert Version.query.count() == 1
+        assert Plan.query.count() == 1
+
+
+def test_purge_cleans_extra_registered_versions_and_plans(file_app, monkeypatch, capsys):
+    """人为塞入多条带登记的演示版本 / 计划 → apply 按 计划→版本→项目 FK 安全序清掉多余的。
+
+    不违反 FK：plan.version_id / plan.project_id 与 version.project_id 都是真外键，先删计划
+    再删版本，「每类留一」保留 id 最小的一条。且不误删真实用户建的（无 SeedRecord 的）行。
+    """
+    make, db_path = file_app
+    app = make(seed=True)
+    with app.app_context():
+        project = Project.query.one()
+        extra_version = Version(name="额外演示版本", project_id=project.id,
+                                status="active", position=1)
+        db.session.add(extra_version)
+        db.session.flush()
+        extra_plan = Plan(name="额外演示计划", version_id=extra_version.id,
+                          project_id=project.id, status="active", position=1)
+        db.session.add(extra_plan)
+        db.session.flush()
+        SeedRecord.mark("version", extra_version.id)
+        SeedRecord.mark("plan", extra_plan.id)
+        # 一条**真实用户**建的版本（无 SeedRecord）——必须一动不动。
+        real_version = Version(name="用户自己建的版本", project_id=project.id,
+                               status="planning", position=2)
+        db.session.add(real_version)
+        db.session.commit()
+        real_version_id = real_version.id
+    _release(app)
+
+    url = f"sqlite:///{db_path.as_posix()}"
+    code = _run_cli(monkeypatch, url, "--apply", "--no-backup")
+    assert code in (0, 2)
+    capsys.readouterr()
+
+    verify = make(seed=False)
+    with verify.app_context():
+        # 有出身证明的两条版本里，「每类留一」保留 1 条；加上真实用户建的 1 条 = 2。
+        assert Version.query.count() == 2
+        assert db.session.get(Version, real_version_id) is not None   # 真实数据未被误删
+        # 演示计划两条留一 → 剩 1 条。
+        assert Plan.query.count() == 1

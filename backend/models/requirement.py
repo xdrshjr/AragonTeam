@@ -26,6 +26,10 @@ class Requirement(db.Model):
     assignee_id = db.Column(db.Integer, nullable=True)
 
     reporter_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    # 【version-plan-hierarchy §3.1 / §4.3】归属计划；NULL = 未归属。**不建 DB 外键**：
+    # 它经 schema_sync 给存量表追加（只支持 ADD COLUMN，无法可靠加带 FK 的列），与多态
+    # assignee_id 同策略——引用完整性在写入边界一次性校验，删除侧走 lifecycle 前置守卫。
+    plan_id = db.Column(db.Integer, nullable=True, index=True)
     # 列内排序：MVP 追加到列尾（position = 该列现有最大值 + 1，见 §2.2 B / R-09）。
     position = db.Column(db.Integer, nullable=False, default=0)
 
@@ -48,6 +52,10 @@ class Requirement(db.Model):
             "assignee_id": self.assignee_id,
             "assignee": self.resolve_assignee(),
             "reporter_id": self.reporter_id,
+            # 【version-plan-hierarchy §4.3】只输出 plan_id 主键；人类可读的 `plan` 概要
+            # （含所属版本名）在**序列化站点**批量富化（services/hierarchy.with_plan_context），
+            # 不进 to_dict（否则 50 行就是 50 次子查询，与 document_count 同策略）。
+            "plan_id": self.plan_id,
             "position": self.position,
             "created_at": _iso(self.created_at),
             "updated_at": _iso(self.updated_at),

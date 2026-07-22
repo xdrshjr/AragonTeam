@@ -17,11 +17,16 @@
 from extensions import db, utcnow
 
 # 当前 seed 契约版本。seed.py 每次改写入内容都应递增，便于日后按版本区分批次。
-SEED_VERSION = "2"
+# 【version-plan-hierarchy §4.6 评审 P2-B】seed 新增 1 版本 + 1 计划 → 递增到 "3"。
+SEED_VERSION = "3"
 
 # 可登记的实体类别（与各表的多态命名保持单数一致）。
+# 【version-plan-hierarchy §4.6 评审 P2-A】追加 version / plan：`SeedRecord.mark` 实测**不做**
+# 白名单校验，故并非「不加会被拒绝」；追加的真实理由是让本白名单保持「可登记类别」的单一
+# 真相，并与 tools/purge_demo_data.py::_entity_models 的登记**一一对应**——两处任缺其一，
+# 版本 / 计划要么变新孤岛，要么被 purge 的 _prune_orphan_seed_records 误判为孤儿删掉登记。
 SEED_ENTITY_TYPES = (
-    "user", "agent", "project", "requirement", "bug",
+    "user", "agent", "project", "version", "plan", "requirement", "bug",
     "comment", "activity", "notification",
 )
 

@@ -6,8 +6,10 @@
 """
 import pytest
 
+from datetime import date
+
 from services.validation import (
-    ValidationError, json_body, want_str, want_int, want_bool,
+    ValidationError, json_body, want_str, want_int, want_bool, want_date,
 )
 
 
@@ -251,6 +253,28 @@ def test_json_body_non_object_returns_empty(app):
         assert json_body() == {}
     with app.test_request_context(json={"a": 1}):
         assert json_body() == {"a": 1}
+
+
+# ————————————————————— version-plan-hierarchy §6.4：want_date 请求体日期原语 —————————————————————
+
+def test_want_date_parses_valid():
+    assert want_date({"d": "2026-07-21"}, "d") == date(2026, 7, 21)
+
+
+def test_want_date_missing_or_empty_is_none():
+    assert want_date({}, "d") is None
+    assert want_date({"d": ""}, "d") is None
+    assert want_date({"d": "   "}, "d") is None
+    assert want_date({"d": None}, "d") is None
+
+
+def test_want_date_invalid_raises():
+    with pytest.raises(ValidationError):
+        want_date({"d": "2026-13-40"}, "d")      # 越界日期
+    with pytest.raises(ValidationError):
+        want_date({"d": "not-a-date"}, "d")      # 非 ISO 格式
+    with pytest.raises(ValidationError):
+        want_date({"d": 20260721}, "d")          # 非字符串
 
 
 # ————————————————————— §2.4：reliability-hardening 漏网的残余坏输入 500→400 —————————————————————

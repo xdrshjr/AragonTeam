@@ -41,7 +41,8 @@ def test_second_start_does_not_reseed(file_app):
     with restarted.app_context():
         # 幂等门是 User.query.count() > 0；第二次启动必须整体跳过。
         assert Requirement.query.count() == 1
-        assert SeedRecord.query.count() == 8
+        # 【version-plan-hierarchy §4.6】seed 现为 10 类（8 + 版本 + 计划），各登记一条。
+        assert SeedRecord.query.count() == 10
 
 
 def test_file_backed_db_enables_wal_and_foreign_keys(file_app):
