@@ -4,7 +4,7 @@
 // 结果弹窗、toast 四处都要用。散落四份的下场必然是「同一个 error 串在两个地方说了
 // 两种话」——用户会以为是两回事。
 
-import { api } from "@/lib/api";
+import { ApiError, api } from "@/lib/api";
 import { statusStyle } from "@/lib/constants";
 import type { BulkAction, BulkFailure, BulkRequest, BulkResult, BulkSkip } from "@/lib/types";
 
@@ -23,6 +23,7 @@ export const BULK_ACTION_LABELS: Record<BulkAction, string> = {
   unassign: "取消指派",
   priority: "改优先级",
   severity: "改严重度",
+  plan: "归属计划",
   delete: "删除",
 };
 
@@ -60,8 +61,29 @@ export function failureText(failure: BulkFailure, entity: BulkEntity): string {
       const tail = allowed.length ? `，当前只能流转到：${allowed.join("、")}` : "";
       return `「${from}」不能直接流转到「${to}」${tail}`;
     }
+    case "plan and ticket must be in the same project":
+      return "该工单与目标计划不在同一个项目";
     default:
       return failure.error;
+  }
+}
+
+/** **请求级**错误（整批 400/403/404）→ 人话。与逐项三桶是两条不同的路径：
+ *  三桶走 `BulkResultDialog`，本函数走 `BulkToolbar.applyFromModal` 的 toast。
+ *  弹窗组件在调用栈上根本看不到这个 `ApiError`（它们只 `onConfirm` 交值），
+ *  所以翻译只能落在这里。
+ *
+ *  **default 分支原样返回 `err.message`**，故对既有四个动作（assign/move/level/delete）
+ *  **零行为变化**；这与 `failureText`「未知 error 原样透出，绝不吞掉后端说了什么」同款。 */
+export function requestErrorText(err: unknown): string {
+  if (!(err instanceof ApiError)) return "批量操作失败";
+  switch (err.message) {
+    case "plan_id is required":
+      return "请先选择目标计划，或选择「解除归属」";
+    case "plan_id is invalid":
+      return "所选计划已不存在（可能刚被他人删除），请重新选择";
+    default:
+      return err.message;
   }
 }
 
@@ -78,6 +100,8 @@ export function skipText(skip: BulkSkip): string {
       return "优先级本就是该取值";
     case "already at this severity":
       return "严重度本就是该取值";
+    case "already in target plan":
+      return "本就归属该计划";
     default:
       return skip.reason;
   }

@@ -241,3 +241,26 @@ def test_convert_to_bug_inherits_plan(client, auth, data):
     r = client.post(f"/api/requirements/{req['id']}/convert-to-bug", json={}, headers=headers)
     assert r.status_code == 201, r.get_json()
     assert r.get_json()["plan_id"] == plan["id"]     # 新 BUG 继承源需求 plan_id
+
+
+def test_patch_response_carries_plan_context(client, auth, data):
+    """PATCH 改标题后响应体仍带 `plan_id` 与只读 `plan`（version-plan-console §3.9）。
+
+    前端 `useTicket.patch` 把响应**合并**进 SWR 缓存而不是整体覆盖，正是因为这条契约
+    只保证「to_dict() 的列 + plan」——`document_count` 之类的富化字段不在其中。
+    这条用例守的是「合并所依赖的那一半确实存在」。
+    """
+    pid = data["project_id"]
+    _ver, plan = _plan_for(client, auth, pid)
+    req = client.post("/api/requirements",
+                      json={"title": "原标题", "project_id": pid, "plan_id": plan["id"]},
+                      headers=auth("pm")).get_json()
+
+    r = client.patch(f"/api/requirements/{req['id']}", json={"title": "新标题"},
+                     headers=auth("pm"))
+
+    assert r.status_code == 200, r.get_json()
+    body = r.get_json()
+    assert body["title"] == "新标题"
+    assert body["plan_id"] == plan["id"]
+    assert body["plan"]["name"] == plan["name"]

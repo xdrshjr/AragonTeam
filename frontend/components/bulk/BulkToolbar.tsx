@@ -1,13 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { ApiError } from "@/lib/api";
+import { useSWRConfig } from "swr";
+import { invalidateHierarchyViews } from "@/lib/swr-keys";
 import { useToast } from "@/lib/toast";
 import {
   BulkEntity,
   ENTITY_LABELS,
   bulkSummary,
   needsReview,
+  requestErrorText,
   runBulk,
 } from "@/lib/bulk";
 import type { BulkRequest, BulkResult, Card } from "@/lib/types";
@@ -17,6 +19,7 @@ import ConfirmDialog from "@/components/ui/ConfirmDialog";
 import BulkActionBar, { BulkAction } from "@/components/bulk/BulkActionBar";
 import BulkAssignModal from "@/components/bulk/BulkAssignModal";
 import BulkLevelModal from "@/components/bulk/BulkLevelModal";
+import BulkPlanModal from "@/components/bulk/BulkPlanModal";
 import BulkStatusModal from "@/components/bulk/BulkStatusModal";
 import BulkResultDialog from "@/components/bulk/BulkResultDialog";
 
@@ -32,7 +35,7 @@ interface Props {
 }
 
 /** 动作栏按钮 key = 弹窗模式，两者共用一个枚举，省掉一次 as 转换。 */
-type BulkMode = "assign" | "move" | "level" | "delete";
+type BulkMode = "assign" | "move" | "level" | "plan" | "delete";
 type Mode = BulkMode | null;
 
 /**
@@ -52,6 +55,7 @@ export default function BulkToolbar({
   entity, selection, pageTotal, canManage, onDone,
 }: Props) {
   const toast = useToast();
+  const { mutate } = useSWRConfig();
   const [mode, setMode] = useState<Mode>(null);
   const [pending, setPending] = useState(false);
   const [result, setResult] = useState<BulkResult | null>(null);
@@ -62,6 +66,10 @@ export default function BulkToolbar({
     { key: "assign", label: "指派", requiresManage: true },
     { key: "move", label: "流转状态" },
     { key: "level", label: `改${levelLabel}` },
+    // 【version-plan-console §5.5】**不带 requiresManage**：后端 `_ROLE_GATES["plan"]`
+    // 为 None，逐项走 can_manage_ticket，与既有 move / level 同型。「一张一张改得动、
+    // 一次改多张就 403」是不可接受的。
+    { key: "plan", label: "归属计划" },
     { key: "delete", label: "删除", danger: true, requiresManage: true },
   ];
   const visibleActions = actions.filter((a) => canManage || !a.requiresManage);
@@ -74,6 +82,10 @@ export default function BulkToolbar({
       // 只保留失败项的勾选：成功的已经变了样，留着只会碍事。
       selection.replace(res.failed.map((f) => f.id));
       onDone();
+      // 【version-plan-console §3.2 落点⑤】`onDone` 只是页内 mutate（当前列表），
+      // 刷不到 /versions 与 /plans 的进度与计数。批量归属改分母、批量流转改分子、
+      // 批量删除两者都改——三种动作都得让层级视图跟着变。
+      void invalidateHierarchyViews(mutate);
       setMode(null);
       toast[res.counts.failed > 0 ? "error" : "success"](bulkSummary(res));
       if (needsReview(res)) setResult(res);
@@ -88,7 +100,9 @@ export default function BulkToolbar({
     try {
       await apply(body);
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "批量操作失败");
+      // 【version-plan-console §4.3 末】请求级 400 在这里统一中文化。default 分支原样
+      // 透出 `err.message`，故对既有四个动作零行为变化。
+      toast.error(requestErrorText(err));
     }
   }
 
@@ -143,6 +157,20 @@ export default function BulkToolbar({
             action: entity === "requirements" ? "priority" : "severity",
             value,
           })
+        }
+        onClose={() => setMode(null)}
+      />
+
+      <BulkPlanModal
+        open={mode === "plan"}
+        entity={entity}
+        count={selection.count}
+        pending={pending}
+        onConfirm={(planId) =>
+          // **显式写出 `plan_id` 这个键**。`plan_id: planId ?? undefined` 之类的
+          // 「顺手简化」会让「解除归属」退化成缺键 → 整批 400（后端有意如此：
+          // 一个漏传字段的客户端不该静默清空整批工单的归属）。
+          void applyFromModal({ action: "plan", plan_id: planId })
         }
         onClose={() => setMode(null)}
       />

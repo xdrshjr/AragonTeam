@@ -11,6 +11,7 @@ from models.bug import Bug
 from models.comment import Comment
 from models.notification import Notification
 from models.requirement import Requirement
+from services import bulk_ops
 from services.bulk_ops import MAX_BULK_IDS
 
 
@@ -255,6 +256,184 @@ def test_bulk_priority_skips_tickets_already_at_that_value(client, auth, make_re
     r = _bulk(client, auth("pm"), ids=[req["id"]], action="priority", value="high")
 
     assert r.get_json()["skipped"] == [{"id": req["id"], "reason": "already at this priority"}]
+
+
+# ——————————————— C2. 批量归属计划（version-plan-console §8.1）———————————————
+
+def _make_plan(client, headers, project_id, name="迭代 1"):
+    """建一个版本 + 其下一个计划，返回计划 dict（走真实 REST，不绕过路由校验）。"""
+    v = client.post("/api/versions", json={"name": "v1.0", "project_id": project_id},
+                    headers=headers)
+    assert v.status_code == 201, v.get_json()
+    p = client.post("/api/plans", json={"name": name, "version_id": v.get_json()["id"]},
+                    headers=headers)
+    assert p.status_code == 201, p.get_json()
+    return p.get_json()
+
+
+def _make_req_in(client, headers, project_id, title="需求"):
+    r = client.post("/api/requirements", json={"title": title, "project_id": project_id},
+                    headers=headers)
+    assert r.status_code == 201, r.get_json()
+    return r.get_json()
+
+
+def test_bulk_plan_assigns_all_selected_tickets(client, auth, app, make_requirement, data):
+    """整批归属到同一个计划；顺带钉住「无项目工单采纳计划的项目」这个第二副作用。
+
+    后者是 `resolve_plan_for_ticket`（hierarchy.py:119-121）的既定语义被批量复用后的
+    结果：一次操作可能同时把 N 张无项目工单搬进某个项目。写进用例免得日后被当成数据损坏。
+    """
+    headers = auth("pm")
+    plan = _make_plan(client, headers, data["project_id"])
+    in_project = [_make_req_in(client, headers, data["project_id"], f"同项目 {i}")
+                  for i in range(3)]
+    projectless = make_requirement(title="无项目")          # project_id 为 NULL
+
+    ids = [r["id"] for r in in_project] + [projectless["id"]]
+    r = _bulk(client, headers, ids=ids, action="plan", plan_id=plan["id"])
+
+    assert r.status_code == 200, r.get_json()
+    body = r.get_json()
+    assert body["action"] == "plan"
+    assert body["counts"]["succeeded"] == 4
+    with app.app_context():
+        for req in in_project:
+            assert db.session.get(Requirement, req["id"]).plan_id == plan["id"]
+        adopted = db.session.get(Requirement, projectless["id"])
+        assert adopted.plan_id == plan["id"]
+        assert adopted.project_id == plan["project_id"]      # 采纳了计划的项目
+
+
+def test_bulk_plan_null_detaches(client, auth, app, data):
+    """**显式** null 才解除归属——那是用户明确表达过的意图。"""
+    headers = auth("pm")
+    plan = _make_plan(client, headers, data["project_id"])
+    reqs = [_make_req_in(client, headers, data["project_id"], f"已归属 {i}") for i in range(2)]
+    ids = [r["id"] for r in reqs]
+    _bulk(client, headers, ids=ids, action="plan", plan_id=plan["id"])
+
+    r = _bulk(client, headers, ids=ids, action="plan", plan_id=None)
+
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()["counts"]["succeeded"] == 2
+    with app.app_context():
+        for req in reqs:
+            assert db.session.get(Requirement, req["id"]).plan_id is None
+
+
+def test_bulk_plan_skips_tickets_already_in_target_plan(client, auth, app, data):
+    """本就归属目标计划的单进 skipped 桶，且**不写第二条 activity**。"""
+    headers = auth("pm")
+    plan = _make_plan(client, headers, data["project_id"])
+    already = _make_req_in(client, headers, data["project_id"], "本就归属")
+    fresh = _make_req_in(client, headers, data["project_id"], "待归属")
+    _bulk(client, headers, ids=[already["id"]], action="plan", plan_id=plan["id"])
+
+    r = _bulk(client, headers, ids=[already["id"], fresh["id"]],
+              action="plan", plan_id=plan["id"])
+
+    body = r.get_json()
+    assert body["succeeded"] == [fresh["id"]]
+    assert body["skipped"] == [{"id": already["id"], "reason": "already in target plan"}]
+    with app.app_context():
+        assert Activity.query.filter_by(entity_type="requirement", entity_id=already["id"],
+                                        action="updated").count() == 1
+
+
+def test_bulk_plan_fails_per_item_on_cross_project(client, auth, app, data):
+    """跨项目是**逐项**失败：整体仍 200，合法的那张照样落库。
+
+    这条守的是「ValidationError 被逐项接住而不是冒成整批 400」——若它冒到全局处理器，
+    同批另外 49 张合法工单会被一张跨项目的单连坐。
+    """
+    headers = auth("pm")
+    plan = _make_plan(client, headers, data["project_id"])
+    mine = _make_req_in(client, headers, data["project_id"], "本项目")
+    other_project = client.post("/api/projects", json={"name": "别的项目", "key": "OTH"},
+                                headers=headers)
+    assert other_project.status_code == 201, other_project.get_json()
+    foreign = _make_req_in(client, headers, other_project.get_json()["id"], "别项目")
+
+    r = _bulk(client, headers, ids=[mine["id"], foreign["id"]],
+              action="plan", plan_id=plan["id"])
+
+    assert r.status_code == 200, r.get_json()
+    body = r.get_json()
+    assert body["succeeded"] == [mine["id"]]
+    failed = body["failed"][0]
+    assert failed["id"] == foreign["id"]
+    assert failed["error"] == "plan and ticket must be in the same project"
+    assert failed["detail"]["field"] == "plan_id"
+    with app.app_context():
+        assert db.session.get(Requirement, mine["id"]).plan_id == plan["id"]
+        assert db.session.get(Requirement, foreign["id"]).plan_id is None
+
+
+def test_bulk_plan_rejects_unknown_plan(client, auth, make_requirement):
+    """目标计划是**请求级**参数，指向不存在的计划就是整批 400。"""
+    req = make_requirement()
+
+    r = _bulk(client, auth("pm"), ids=[req["id"]], action="plan", plan_id=999999)
+
+    assert r.status_code == 400
+    assert r.get_json()["error"] == "plan_id is invalid"
+
+
+def test_bulk_plan_uses_row_level_permission(client, auth, app, make_requirement, data):
+    """门禁 == 单条 `PATCH /:id` 的行级 `can_manage_ticket`，**不是**一堵更严的角色墙。
+
+    「一张一张改得动、一次改多张就 403」是不可接受的（bulk_ops.py:20-23 的模块不变量）。
+    """
+    headers = auth("pm")
+    plan = _make_plan(client, headers, data["project_id"])
+    mine = make_requirement(title="我的", assignee=("user", data["member_id"]))
+    others = make_requirement(title="别人的", assignee=("user", data["member2_id"]))
+
+    r = _bulk(client, auth("member"), ids=[mine["id"], others["id"]],
+              action="plan", plan_id=plan["id"])
+
+    assert r.status_code == 200, r.get_json()        # 无请求级角色门禁
+    body = r.get_json()
+    assert body["succeeded"] == [mine["id"]]
+    assert body["failed"][0]["id"] == others["id"]
+    assert body["failed"][0]["error"] == "forbidden"
+    with app.app_context():
+        assert db.session.get(Requirement, mine["id"]).plan_id == plan["id"]
+        assert db.session.get(Requirement, others["id"]).plan_id is None
+
+
+def test_bulk_plan_requires_explicit_plan_id(client, auth, app, data):
+    """缺 `plan_id` 键 → 整批 400 且**一行未改**，绝不当作「解除归属」。
+
+    这是本组的破坏性防线：一个漏传字段的客户端不该静默清空整批工单的归属。
+    """
+    headers = auth("pm")
+    plan = _make_plan(client, headers, data["project_id"])
+    reqs = [_make_req_in(client, headers, data["project_id"], f"已归属 {i}") for i in range(2)]
+    ids = [r["id"] for r in reqs]
+    _bulk(client, headers, ids=ids, action="plan", plan_id=plan["id"])
+
+    r = _bulk(client, headers, ids=ids, action="plan")       # 不带 plan_id 键
+
+    assert r.status_code == 400, r.get_json()
+    assert r.get_json()["error"] == "plan_id is required"
+    with app.app_context():
+        for req in reqs:
+            assert db.session.get(Requirement, req["id"]).plan_id == plan["id"]
+
+
+def test_every_bulk_action_has_a_handler():
+    """结构性用例：`ACTIONS` 里的每个动作都必须在 `_Runner._handler()` 里有实现。
+
+    `ACTIONS = tuple(_ROLE_GATES)` 意味着**往 `_ROLE_GATES` 里加一行就等于对外公开了
+    一个新动作**；若 `_handler()` 忘了注册，该动作会一路通过 `want_str(choices=ACTIONS)`
+    与角色门禁，最后在 `_handler()` 撞 `KeyError` → 500，而所有走 HTTP 的用例都碰不到它。
+    本用例把这一类「半落地」事故永久钉死，下一个新动作也受它保护。
+    """
+    for action in bulk_ops.ACTIONS:
+        runner = bulk_ops._Runner("requirement", action, {}, None, None)
+        assert callable(runner._handler()), f"action {action!r} 没有对应的处理器"
 
 
 # ————————————————————— D. 批量删除 —————————————————————

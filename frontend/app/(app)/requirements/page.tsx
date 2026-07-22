@@ -2,11 +2,15 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import { api, listFetcher, ApiError } from "@/lib/api";
 import { useToast } from "@/lib/toast";
 import { useAuth } from "@/lib/auth";
+import { EMPTY_HIERARCHY, isHierarchyParam, toHierarchyQuery } from "@/lib/hierarchy";
+import type { HierarchyFilterValue } from "@/lib/hierarchy";
+import { invalidateHierarchyViews } from "@/lib/swr-keys";
 import { useProjectScope } from "@/lib/project-scope";
+import { useHierarchyOptions } from "@/hooks/useHierarchyOptions";
 import type { Requirement } from "@/lib/types";
 import { statusStyle, PRIORITY_STYLES, REQUIREMENT_COLUMNS } from "@/lib/constants";
 import Header from "@/components/layout/Header";
@@ -22,6 +26,7 @@ import RequirementForm from "@/components/requirements/RequirementForm";
 import AssigneePicker, { AssigneeValue } from "@/components/AssigneePicker";
 import TicketDrawer from "@/components/TicketDrawer";
 import FilterBar from "@/components/FilterBar";
+import PlanBadge from "@/components/planning/PlanBadge";
 import Checkbox from "@/components/ui/Checkbox";
 import BulkToolbar from "@/components/bulk/BulkToolbar";
 import { useBulkSelection } from "@/hooks/useBulkSelection";
@@ -32,7 +37,8 @@ const PAGE_SIZE = 50;
 export default function RequirementsPage() {
   const toast = useToast();
   const { user } = useAuth();
-  const { scopeParam, scopeLabel } = useProjectScope();
+  const { mutate: globalMutate } = useSWRConfig();
+  const { scopeParam, scopeLabel, setScope } = useProjectScope();
   // 后端 POST /requirements 限 admin|pm（§2.4），member 隐藏新建入口，避免提交后才 403。
   const canCreate = user?.role === "admin" || user?.role === "pm";
   // 【§2.9-C1】/assign 后端限 pm/admin；判据同 canCreate，member 不应看到点了必 403 的「指派」按钮。
@@ -47,6 +53,10 @@ export default function RequirementsPage() {
     assignee_type: null,
     assignee_id: null,
   });
+  // 【version-plan-console §3.3】「版本 → 计划」级联筛选。状态住在页面 useState 里、
+  // 不写回 URL（本页既定做法）；URL 只作**一次性入口**被读取。
+  const [hierarchy, setHierarchy] = useState<HierarchyFilterValue>(EMPTY_HIERARCHY);
+  const hierarchyOptions = useHierarchyOptions();
 
   // Header 全局搜索：跨页导航时携带 ?q=（进入页面 mount 读取）；已在本页时靠事件即时刷新。
   useEffect(() => {
@@ -60,6 +70,20 @@ export default function RequirementsPage() {
     // 只接受合法列 key，避免把任意查询串灌进过滤条（后端也会忽略，但 UI 不该显示一个假筛选）。
     const s = search.get("status") || "";
     if (s && REQUIREMENT_COLUMNS.some((c) => c.key === s)) setStatus(s);
+    // 【version-plan-console §3.3】承接 /versions 页计划行的「需求 N」深链。
+    // 同一套白名单（正整数或 "none"）：把任意串灌进筛选条会显示一个假筛选。
+    const v = search.get("version_id") || "";
+    const p = search.get("plan_id") || "";
+    if (isHierarchyParam(v) || isHierarchyParam(p)) {
+      setHierarchy({
+        version: isHierarchyParam(v) ? v : "",
+        plan: isHierarchyParam(p) ? p : "",
+      });
+    }
+    // 深链同时带 project_id：不切作用域的话，「全部项目」视图里点过来的计划会被
+    // 当前作用域 AND 成空表，用户会以为「刚才那 4 条需求丢了」。
+    const proj = search.get("project_id") || "";
+    if (/^[1-9]\d*$/.test(proj)) setScope(Number(proj));
     function onSearch(e: Event) {
       const term = (e as CustomEvent<string>).detail?.trim();
       if (!term) return;
@@ -88,7 +112,10 @@ export default function RequirementsPage() {
   if (scopeParam) params.set("project_id", scopeParam);
   params.set("limit", String(PAGE_SIZE));
   params.set("offset", String(offset));
-  const listKey = `/requirements?${params.toString()}`;
+  // 层级参数走 lib/hierarchy 的唯一拼装函数（"" 的维度整个省略，不发空参数）。
+  const hierarchyQuery = toHierarchyQuery(hierarchy);
+  const listKey =
+    `/requirements?${params.toString()}${hierarchyQuery ? `&${hierarchyQuery}` : ""}`;
   const { data, error, mutate } = useSWR(listKey, listFetcher<Requirement>, {
     keepPreviousData: true, // 翻页保留上一页数据，消除骨架闪烁
   });
@@ -96,7 +123,8 @@ export default function RequirementsPage() {
 
   // 任一筛选条件（含项目作用域）变化 → 回第一页。否则「筛出 3 条却停在 offset=50」→ 空表误读。
   const filterSignature =
-    `${debounced}|${status}|${priority}|${assignee.assignee_type}|${assignee.assignee_id}|${scopeParam}`;
+    `${debounced}|${status}|${priority}|${assignee.assignee_type}|${assignee.assignee_id}|${scopeParam}`
+    + `|${hierarchy.version}|${hierarchy.plan}`;
   useEffect(() => {
     setOffset(0);
   }, [filterSignature]);
@@ -180,6 +208,15 @@ export default function RequirementsPage() {
           )}
           assignee={assignee}
           onAssignee={setFilterAssignee}
+          hierarchy={{
+            value: hierarchy,
+            onChange: setHierarchy,
+            versions: hierarchyOptions.versions,
+            plans: hierarchyOptions.plans,
+            loading: hierarchyOptions.isLoading,
+            versionsTruncated: hierarchyOptions.versionsTruncated,
+            plansTruncated: hierarchyOptions.plansTruncated,
+          }}
         />
 
         <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-card">
@@ -213,6 +250,8 @@ export default function RequirementsPage() {
                   <th className="px-4 py-3 font-medium">状态</th>
                   <th className="px-4 py-3 font-medium">优先级</th>
                   <th className="px-4 py-3 font-medium">负责人</th>
+                  {/* 【version-plan-console §7.3】计划列：点版本段可回跳 /versions。 */}
+                  <th className="px-4 py-3 font-medium">计划</th>
                   {/* 【ticket-document-management §3.5】文档数列：只读指示，与看板的
                       回形针徽章同源（后端 additive `document_count`）。 */}
                   <th className="px-4 py-3 font-medium">文档</th>
@@ -254,6 +293,9 @@ export default function RequirementsPage() {
                           {r.assignee ? r.assignee.name : "未指派"}
                         </span>
                       </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <PlanBadge plan={r.plan} linkVersion />
                     </td>
                     <td className="px-4 py-3 text-ink-muted">
                       {(r.document_count ?? 0) > 0 ? (
@@ -326,6 +368,9 @@ export default function RequirementsPage() {
           onCreated={() => {
             setCreating(false);
             mutate();
+            // 【version-plan-console §3.2 落点⑥】新单可能带 plan_id，计划行的
+            // 「需求 N」与版本聚合进度必须跟着变；页内 mutate 只刷当前列表。
+            void invalidateHierarchyViews(globalMutate);
           }}
         />
       </Modal>

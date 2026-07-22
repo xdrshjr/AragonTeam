@@ -1,5 +1,9 @@
 // 全量 TS 类型（§3.3 lib/types.ts）。前后端 status key 契约必须逐字一致。
 
+// `Requirement.plan` / `Bug.plan` 要用它；`export *`（见下方「版本 / 计划」一节）
+// 只做再导出、不把名字带进本文件作用域，故这里另需一次显式 import。
+import type { PlanContext } from "@/lib/planning-types";
+
 export type Role = "admin" | "pm" | "member";
 export type AgentKind = "dev" | "qa" | "generic";
 export type AgentStatus = "idle" | "busy" | "offline";
@@ -147,6 +151,12 @@ export interface Requirement {
   assignee_id: number | null;
   assignee: AssigneeSummary | null;
   reporter_id: number | null;
+  /** 归属计划；未归属为 null。**必填**——它在后端 `to_dict()` 里，每个响应都带着它。 */
+  plan_id: number | null;
+  /** 只读层级概要，**只在做了富化的序列化站点存在**，故为可选（同 `document_count?` 的先例）：
+   *  `/api/search`、`/api/me/work` 等站点返回裸 `to_dict()`，此处即 undefined。
+   *  **消费侧一律按「缺省即无」渲染**：`ticket.plan ? … : "未归属"`，绝不写 `ticket.plan!.name`。 */
+  plan?: PlanContext | null;
   position: number;
   /** 绑定的文档数（ticket-document-management §4.3，additive）。看板 / 列表据此渲染
    *  回形针徽章。旧响应缺省时为 undefined，渲染方须按 0 处理。 */
@@ -167,6 +177,10 @@ export interface Bug {
   assignee: AssigneeSummary | null;
   reporter_id: number | null;
   related_requirement_id: number | null;
+  /** 归属计划；未归属为 null。**必填**（同 `Requirement.plan_id` 的理由）。 */
+  plan_id: number | null;
+  /** 只读层级概要，仅在做了富化的序列化站点存在（同 `Requirement.plan`）。 */
+  plan?: PlanContext | null;
   position: number;
   /** 绑定的文档数（ticket-document-management §4.3，additive）。看板 / 列表据此渲染
    *  回形针徽章。旧响应缺省时为 undefined，渲染方须按 0 处理。 */
@@ -514,6 +528,7 @@ export type BulkAction =
   | "unassign"
   | "priority"
   | "severity"
+  | "plan"
   | "delete";
 
 /** POST /api/{requirements|bugs}/bulk 请求体；动作参数按 action 取子集。 */
@@ -527,6 +542,11 @@ export interface BulkRequest {
   assignee_id?: number;
   /** action=priority|severity：目标级别。 */
   value?: string;
+  /** action=plan 的目标计划：`number` = 归属；`null` = 解除。
+   *  **键必须显式存在——缺键是整批 400，不是「解除归属」**（后端 bulk_ops 的 plan 分支）。
+   *  语法上仍可选（本结构为各动作共用），故 `tsc` 兜不住漏传：**唯一调用点必须显式构造它**
+   *  （见 `BulkToolbar` 的 `<BulkPlanModal onConfirm>`）。 */
+  plan_id?: number | null;
 }
 
 /** 逐项失败。`error` 与单条端点的错误串一致，`detail` 形状随 error 而变。 */
@@ -538,6 +558,9 @@ export interface BulkFailure {
     to?: string;
     allowed?: string[];
     reason?: string;
+    /** action=plan 逐项失败时承载 ValidationError 的定位线索。 */
+    field?: string;
+    expected?: string;
   };
 }
 
@@ -571,6 +594,12 @@ export interface ProjectUpdate {
   owner_id?: number | null;
   archived?: boolean;
 }
+
+// —— version-plan-console：版本 / 计划 ——
+// 类型本体住在 lib/planning-types.ts（本文件加完会越过 CLAUDE.md 的 800 行硬阈值，
+// 该规则的处置逐字是「超过即按职责拆分到新模块」）。这里原样再导出，故设计里写的
+// `import type { Version } from "@/lib/types"` 逐字仍然成立。
+export * from "@/lib/planning-types";
 
 // —— ticket-document-management：文档 ——
 //

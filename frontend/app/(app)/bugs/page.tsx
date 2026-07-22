@@ -2,11 +2,15 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import { api, listFetcher, ApiError } from "@/lib/api";
 import { useToast } from "@/lib/toast";
 import { useAuth } from "@/lib/auth";
+import { EMPTY_HIERARCHY, isHierarchyParam, toHierarchyQuery } from "@/lib/hierarchy";
+import type { HierarchyFilterValue } from "@/lib/hierarchy";
+import { invalidateHierarchyViews } from "@/lib/swr-keys";
 import { useProjectScope } from "@/lib/project-scope";
+import { useHierarchyOptions } from "@/hooks/useHierarchyOptions";
 import type { Bug } from "@/lib/types";
 import { statusStyle, SEVERITY_STYLES, BUG_COLUMNS } from "@/lib/constants";
 import Header from "@/components/layout/Header";
@@ -22,6 +26,7 @@ import BugForm from "@/components/bugs/BugForm";
 import AssigneePicker, { AssigneeValue } from "@/components/AssigneePicker";
 import TicketDrawer from "@/components/TicketDrawer";
 import FilterBar from "@/components/FilterBar";
+import PlanBadge from "@/components/planning/PlanBadge";
 import Checkbox from "@/components/ui/Checkbox";
 import BulkToolbar from "@/components/bulk/BulkToolbar";
 import { useBulkSelection } from "@/hooks/useBulkSelection";
@@ -32,7 +37,8 @@ const PAGE_SIZE = 50;
 export default function BugsPage() {
   const toast = useToast();
   const { user } = useAuth();
-  const { scopeParam, scopeLabel } = useProjectScope();
+  const { mutate: globalMutate } = useSWRConfig();
+  const { scopeParam, scopeLabel, setScope } = useProjectScope();
   // 后端 POST /bugs 限 admin|pm（§2.4），member 隐藏新建入口，避免提交后才 403。
   const canCreate = user?.role === "admin" || user?.role === "pm";
   // 【§2.9-C1】/assign 后端限 pm/admin；判据同 canCreate，member 不应看到点了必 403 的「指派」按钮。
@@ -47,6 +53,9 @@ export default function BugsPage() {
     assignee_type: null,
     assignee_id: null,
   });
+  // 【version-plan-console §3.3】「版本 → 计划」级联筛选（与需求页同构）。
+  const [hierarchy, setHierarchy] = useState<HierarchyFilterValue>(EMPTY_HIERARCHY);
+  const hierarchyOptions = useHierarchyOptions();
 
   // Header 全局搜索：跨页导航时携带 ?q=（进入页面 mount 读取）；已在本页时靠事件即时刷新（B6，与需求页对称）。
   useEffect(() => {
@@ -59,6 +68,18 @@ export default function BugsPage() {
     // 【lifecycle-and-governance §2.8】承接看板被截断列的「查看全部」出口（?status=<key>）。
     const s = search.get("status") || "";
     if (s && BUG_COLUMNS.some((c) => c.key === s)) setStatus(s);
+    // 【version-plan-console §3.3】承接 /versions 页计划行的「BUG N」深链（同需求页）。
+    const v = search.get("version_id") || "";
+    const p = search.get("plan_id") || "";
+    if (isHierarchyParam(v) || isHierarchyParam(p)) {
+      setHierarchy({
+        version: isHierarchyParam(v) ? v : "",
+        plan: isHierarchyParam(p) ? p : "",
+      });
+    }
+    // 深链同时带 project_id，否则「全部项目」视图里点过来的计划会被当前作用域 AND 成空表。
+    const proj = search.get("project_id") || "";
+    if (/^[1-9]\d*$/.test(proj)) setScope(Number(proj));
     function onSearch(e: Event) {
       const term = (e as CustomEvent<string>).detail?.trim();
       if (!term) return;
@@ -87,7 +108,8 @@ export default function BugsPage() {
   if (scopeParam) params.set("project_id", scopeParam);
   params.set("limit", String(PAGE_SIZE));
   params.set("offset", String(offset));
-  const listKey = `/bugs?${params.toString()}`;
+  const hierarchyQuery = toHierarchyQuery(hierarchy);
+  const listKey = `/bugs?${params.toString()}${hierarchyQuery ? `&${hierarchyQuery}` : ""}`;
   const { data, error, mutate } = useSWR(listKey, listFetcher<Bug>, {
     keepPreviousData: true, // 翻页保留上一页数据，消除骨架闪烁
   });
@@ -95,7 +117,8 @@ export default function BugsPage() {
 
   // 任一筛选条件（含项目作用域）变化 → 回第一页，避免「筛出 3 条却停在 offset=50」的空表误读。
   const filterSignature =
-    `${debounced}|${status}|${severity}|${assignee.assignee_type}|${assignee.assignee_id}|${scopeParam}`;
+    `${debounced}|${status}|${severity}|${assignee.assignee_type}|${assignee.assignee_id}|${scopeParam}`
+    + `|${hierarchy.version}|${hierarchy.plan}`;
   useEffect(() => {
     setOffset(0);
   }, [filterSignature]);
@@ -177,6 +200,15 @@ export default function BugsPage() {
           )}
           assignee={assignee}
           onAssignee={setFilterAssignee}
+          hierarchy={{
+            value: hierarchy,
+            onChange: setHierarchy,
+            versions: hierarchyOptions.versions,
+            plans: hierarchyOptions.plans,
+            loading: hierarchyOptions.isLoading,
+            versionsTruncated: hierarchyOptions.versionsTruncated,
+            plansTruncated: hierarchyOptions.plansTruncated,
+          }}
         />
 
         <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-card">
@@ -210,6 +242,8 @@ export default function BugsPage() {
                   <th className="px-4 py-3 font-medium">状态</th>
                   <th className="px-4 py-3 font-medium">严重度</th>
                   <th className="px-4 py-3 font-medium">负责人</th>
+                  {/* 【version-plan-console §7.3】计划列（与需求页同构）。 */}
+                  <th className="px-4 py-3 font-medium">计划</th>
                   {/* 【ticket-document-management §3.5】文档数列：只读指示，与看板的
                       回形针徽章同源（后端 additive `document_count`）。 */}
                   <th className="px-4 py-3 font-medium">文档</th>
@@ -252,6 +286,9 @@ export default function BugsPage() {
                           {b.assignee ? b.assignee.name : "未指派"}
                         </span>
                       </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <PlanBadge plan={b.plan} linkVersion />
                     </td>
                     <td className="px-4 py-3 text-ink-muted">
                       {(b.document_count ?? 0) > 0 ? (
@@ -325,6 +362,9 @@ export default function BugsPage() {
           onCreated={() => {
             setCreating(false);
             mutate();
+            // 【version-plan-console §3.2 落点⑥】新单可能带 plan_id，计划行的「BUG N」
+            // 与版本聚合进度必须跟着变；页内 mutate 只刷当前列表。
+            void invalidateHierarchyViews(globalMutate);
           }}
         />
       </Modal>

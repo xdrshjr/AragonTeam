@@ -1,6 +1,10 @@
 "use client";
 
 import AssigneePicker, { AssigneeValue } from "@/components/AssigneePicker";
+import HierarchySelects from "@/components/planning/HierarchySelects";
+import { EMPTY_HIERARCHY, hasHierarchyFilter } from "@/lib/hierarchy";
+import type { HierarchyFilterValue } from "@/lib/hierarchy";
+import type { Plan, Version } from "@/lib/types";
 
 interface Option {
   value: string;
@@ -19,6 +23,20 @@ interface Props {
   levelOptions: Option[];
   assignee: AssigneeValue;
   onAssignee: (v: AssigneeValue) => void;
+  /** 「版本 → 计划」级联筛选（version-plan-console §6.3）。**缺省不渲染**，
+   *  故既有调用点零改动。
+   *
+   *  为什么是一个可选对象属性而不是 6 个标量属性：本 Props 已有 11 个字段，再摊平
+   *  6 个会逼近可读上限，且「这 6 个要么全给要么全不给」的耦合关系会丢失。 */
+  hierarchy?: {
+    value: HierarchyFilterValue;
+    onChange: (next: HierarchyFilterValue) => void;
+    versions: Version[];
+    plans: Plan[];
+    loading?: boolean;
+    versionsTruncated?: boolean;
+    plansTruncated?: boolean;
+  };
 }
 
 // 列表页过滤条（Phase-3 §2.6）：关键字 + 状态 + 优先级/严重度 + 指派人。
@@ -35,9 +53,11 @@ export default function FilterBar({
   levelOptions,
   assignee,
   onAssignee,
+  hierarchy,
 }: Props) {
   const hasFilter =
-    keyword || status || level || (assignee.assignee_type && assignee.assignee_id != null);
+    keyword || status || level || (assignee.assignee_type && assignee.assignee_id != null) ||
+    (hierarchy ? hasHierarchyFilter(hierarchy.value) : false);
 
   const selectCls =
     "h-9 rounded-lg border border-border bg-surface px-2.5 text-sm text-ink focus:border-clay focus:outline-none focus:ring-2 focus:ring-clay/20";
@@ -89,6 +109,18 @@ export default function FilterBar({
         <AssigneePicker label="" value={assignee} onChange={onAssignee} />
       </div>
 
+      {hierarchy && (
+        <HierarchySelects
+          value={hierarchy.value}
+          onChange={hierarchy.onChange}
+          versions={hierarchy.versions}
+          plans={hierarchy.plans}
+          loading={hierarchy.loading}
+          versionsTruncated={hierarchy.versionsTruncated}
+          plansTruncated={hierarchy.plansTruncated}
+        />
+      )}
+
       {hasFilter && (
         <button
           onClick={() => {
@@ -96,6 +128,7 @@ export default function FilterBar({
             onStatus("");
             onLevel("");
             onAssignee({ assignee_type: null, assignee_id: null });
+            hierarchy?.onChange(EMPTY_HIERARCHY);
           }}
           className="h-9 rounded-lg px-3 text-sm text-ink-muted hover:bg-black/[0.04] hover:text-ink"
         >

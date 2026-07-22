@@ -11,6 +11,7 @@ import Input from "@/components/ui/Input";
 import Textarea from "@/components/ui/Textarea";
 import Select from "@/components/ui/Select";
 import AssigneePicker, { AssigneeValue } from "@/components/AssigneePicker";
+import PlanPicker from "@/components/planning/PlanPicker";
 
 interface Props {
   onCreated: (bug: Bug) => void;
@@ -31,6 +32,8 @@ export default function BugForm({ onCreated, onCancel }: Props) {
   const [severity, setSeverity] = useState<Severity>("major");
   // 【§2.4⑧-3】默认继承当前作用域（全部 / 未归属时默认不归属，与今天一致）。
   const [projectId, setProjectId] = useState(typeof scope === "number" ? String(scope) : "");
+  // 【version-plan-console §5.5】与需求表单同构：可预选计划，切项目即复位。
+  const [planId, setPlanId] = useState<number | null>(null);
   const [assignee, setAssignee] = useState<AssigneeValue>({
     assignee_type: null,
     assignee_id: null,
@@ -54,6 +57,8 @@ export default function BugForm({ onCreated, onCancel }: Props) {
         severity,
         // undefined 经 JSON.stringify 自动省略 → 后端 want_int 得 None，语义与今天一致。
         project_id: projectId ? Number(projectId) : undefined,
+        // 同理：未选计划就省略这个键（后端契约是「无该键 → 不改」）。
+        plan_id: planId ?? undefined,
       });
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "创建失败");
@@ -104,13 +109,21 @@ export default function BugForm({ onCreated, onCancel }: Props) {
           label="项目"
           name="project_id"
           value={projectId}
-          onChange={(e) => setProjectId(e.target.value)}
+          onChange={(e) => {
+            setProjectId(e.target.value);
+            setPlanId(null);
+          }}
           options={[
             { value: "", label: "不归属项目" },
             ...(projects ?? []).map((p) => ({ value: String(p.id), label: `${p.key} · ${p.name}` })),
           ]}
         />
       </div>
+      <PlanPicker
+        value={planId}
+        onChange={setPlanId}
+        projectId={projectId ? Number(projectId) : undefined}
+      />
       <AssigneePicker value={assignee} onChange={setAssignee} />
       <div className="mt-2 flex justify-end gap-2">
         <Button type="button" variant="ghost" onClick={onCancel}>

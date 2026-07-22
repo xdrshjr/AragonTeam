@@ -92,7 +92,12 @@ export function useTicket(entity: Entity, id: number | null) {
       // 【§2.10-D4】用 PATCH 返回体（含新 updated_at）落缓存，使下一次乐观并发写携带新鲜时间戳，
       // 避免连续自我编辑（如连改优先级/严重度）在 mutate 回来前触发假 409（并发冲突误报）。
       const updated = await api.patch<Ticket>(`/${entity}/${id}`, payload);
-      mutateTicket(updated, { revalidate: false });
+      // 【version-plan-console §3.9】由整体覆盖改为**合并**：后端 PATCH 返回体由
+      // `to_dict()` 构造（外加 plan 概要），**不含 `document_count` 之类的序列化站点
+      // 富化字段**；整体覆盖会把它们从缓存里抹掉，详情页徽章与删除确认文案随之说谎。
+      // 合并保留旧富化、同时吃进新的 updated_at（乐观并发守卫仍拿到新鲜时间戳）。
+      mutateTicket((prev) => ({ ...(prev ?? {}), ...updated } as Ticket),
+                   { revalidate: false });
       mutateFeed();
     },
     [entity, id, ticket, mutateTicket, mutateFeed]

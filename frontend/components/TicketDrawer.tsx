@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSWRConfig } from "swr";
 import { ApiError } from "@/lib/api";
-import { invalidateTicketViews } from "@/lib/swr-keys";
+import { invalidateHierarchyViews, invalidateTicketViews } from "@/lib/swr-keys";
 import { useOverlayLayer } from "@/lib/overlay-stack";
 import { useToast } from "@/lib/toast";
 import { useAuth } from "@/lib/auth";
@@ -17,6 +17,7 @@ import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
 import { AssigneeAvatar } from "@/components/ui/Avatar";
 import AssigneePicker, { AssigneeValue } from "@/components/AssigneePicker";
+import PlanPicker from "@/components/planning/PlanPicker";
 import FeedTimeline from "@/components/collab/FeedTimeline";
 import CommentComposer from "@/components/collab/CommentComposer";
 import { SkeletonDrawer } from "@/components/ui/Skeleton";
@@ -158,6 +159,9 @@ export default function TicketDrawer({ entity, id, onClose, onChanged }: Props) 
     try {
       await advanceAgent();
       toast.success("Agent 已推进到下一步");
+      // 【version-plan-console §3.2 落点③】Agent 推进可能把单推进终态 → 分子变了。
+      // 这是抽屉里**唯一**能改状态的入口（抽屉不提供状态下拉，status 只是只读徽章）。
+      invalidateHierarchyViews(mutate);
       onChanged?.();
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
@@ -188,6 +192,8 @@ export default function TicketDrawer({ entity, id, onClose, onChanged }: Props) 
     toast.success("已删除");
     onClose();          // 抽屉必须关闭：其 SWR key 已 404
     invalidateTicketViews(mutate);
+    // 【version-plan-console §3.2 落点②】删单同时改分子与分母（若它归属某个计划）。
+    invalidateHierarchyViews(mutate);
     onChanged?.();      // 外层列表 / 看板自身的 mutate
   }
 
@@ -226,6 +232,24 @@ export default function TicketDrawer({ entity, id, onClose, onChanged }: Props) 
       onChanged?.();
     } catch (err) {
       handleWriteError(err, "更新失败");
+    }
+  }
+
+  /** 【version-plan-console §7.5 / §3.2 落点①】改计划归属。形状照抄 onLevelChange。
+   *
+   *  失效**必须**挂在这里：改归属会让**两个**计划的分母一进一出（原计划 -1、新计划 +1），
+   *  两个版本的聚合进度随之变。抽屉里那个既有的 `invalidateTicketViews` 只挂在
+   *  `onDelete` 上，跟这条路径毫无关系。 */
+  async function onPlanChange(planId: number | null) {
+    try {
+      await patch({ plan_id: planId });
+      toast.success(planId == null ? "已解除计划归属" : "已更新计划归属");
+      invalidateHierarchyViews(mutate);
+      onChanged?.();
+    } catch (err) {
+      // 跨项目 400 的中文来自后端，原样透出即可——`failureText` 那套翻译只服务
+      // 批量结果弹窗，不要在这里再搭一层。
+      handleWriteError(err, "更新计划归属失败");
     }
   }
 
@@ -397,6 +421,18 @@ export default function TicketDrawer({ entity, id, onClose, onChanged }: Props) 
                 {/* 【§2.7-C1】改派仅 pm/admin 可见（后端 assign 限 pm/admin）。 */}
                 {canAssign && <AssigneePicker value={assigneeValue} onChange={onAssignChange} />}
 
+                {/* 【§7.5】改计划归属。`disabled` 用的是 `:147` 那个**行级** canManage
+                    （canManageTicket），与后端 `PATCH /:id` 的门禁一致——**不是** /versions
+                    页那个 admin｜pm 判据。两处同名不同义，极易串。 */}
+                <PlanPicker
+                  label="计划"
+                  value={ticket.plan_id}
+                  context={ticket.plan}
+                  projectId={ticket.project_id}
+                  disabled={!canManage}
+                  onChange={onPlanChange}
+                />
+
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-muted">
                   <span className="inline-flex items-center gap-1">
                     负责人：
@@ -410,6 +446,14 @@ export default function TicketDrawer({ entity, id, onClose, onChanged }: Props) 
                       ? "未归属"
                       : projects?.find((p) => p.id === ticket.project_id)?.name ??
                         `#${ticket.project_id}`}
+                  </span>
+                  {/* 【version-plan-console §7.5】四层归属一眼可见。`plan` 是可选字段
+                      （某些端点不富化），故一律按「缺省即无」渲染。 */}
+                  <span>
+                    版本 · 计划：
+                    {ticket.plan
+                      ? `${ticket.plan.version_name ?? "—"} · ${ticket.plan.name}`
+                      : "未归属"}
                   </span>
                   <span>创建：{shortTime(ticket.created_at)}</span>
                   <span>更新：{shortTime(ticket.updated_at)}</span>

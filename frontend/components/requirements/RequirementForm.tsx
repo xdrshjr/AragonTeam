@@ -11,6 +11,7 @@ import Input from "@/components/ui/Input";
 import Textarea from "@/components/ui/Textarea";
 import Select from "@/components/ui/Select";
 import AssigneePicker, { AssigneeValue } from "@/components/AssigneePicker";
+import PlanPicker from "@/components/planning/PlanPicker";
 
 interface Props {
   onCreated: (req: Requirement) => void;
@@ -32,6 +33,9 @@ export default function RequirementForm({ onCreated, onCancel }: Props) {
   // 【§2.4⑧-3】默认继承当前作用域，使「选了项目之后新建的单」自然落进该项目；
   // 作用域是「全部 / 未归属」时默认不归属，与今天的行为一致。
   const [projectId, setProjectId] = useState(typeof scope === "number" ? String(scope) : "");
+  // 【version-plan-console §5.5】建单即可预选计划。切项目时复位——上一个项目的计划
+  // 在新项目里必然被后端拒绝（同项目不变量），留着它只会造出一次必然失败的提交。
+  const [planId, setPlanId] = useState<number | null>(null);
   const [assignee, setAssignee] = useState<AssigneeValue>({
     assignee_type: null,
     assignee_id: null,
@@ -56,6 +60,9 @@ export default function RequirementForm({ onCreated, onCancel }: Props) {
         priority,
         // undefined 经 JSON.stringify 自动省略 → 后端 want_int 得 None，语义与今天一致。
         project_id: projectId ? Number(projectId) : undefined,
+        // 同理：未选计划就**省略**这个键，后端 resolve_plan_for_ticket 的契约是
+        // 「无该键 → 不改」，正是我们要的「建单时不归属任何计划」。
+        plan_id: planId ?? undefined,
       });
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "创建失败");
@@ -106,13 +113,21 @@ export default function RequirementForm({ onCreated, onCancel }: Props) {
           label="项目"
           name="project_id"
           value={projectId}
-          onChange={(e) => setProjectId(e.target.value)}
+          onChange={(e) => {
+            setProjectId(e.target.value);
+            setPlanId(null);
+          }}
           options={[
             { value: "", label: "不归属项目" },
             ...(projects ?? []).map((p) => ({ value: String(p.id), label: `${p.key} · ${p.name}` })),
           ]}
         />
       </div>
+      <PlanPicker
+        value={planId}
+        onChange={setPlanId}
+        projectId={projectId ? Number(projectId) : undefined}
+      />
       <AssigneePicker value={assignee} onChange={setAssignee} />
       <div className="mt-2 flex justify-end gap-2">
         <Button type="button" variant="ghost" onClick={onCancel}>

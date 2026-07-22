@@ -3,10 +3,14 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useBoard } from "@/hooks/useBoard";
+import { useHierarchyOptions } from "@/hooks/useHierarchyOptions";
+import { EMPTY_HIERARCHY } from "@/lib/hierarchy";
+import type { HierarchyFilterValue } from "@/lib/hierarchy";
 import { useProjectScope } from "@/lib/project-scope";
 import type { Card } from "@/lib/types";
 import Header from "@/components/layout/Header";
 import Button from "@/components/ui/Button";
+import HierarchySelects from "@/components/planning/HierarchySelects";
 import KanbanBoard from "@/components/kanban/KanbanBoard";
 import TicketDrawer from "@/components/TicketDrawer";
 import { SkeletonBoard } from "@/components/ui/Skeleton";
@@ -14,7 +18,10 @@ import ErrorState from "@/components/ui/ErrorState";
 
 export default function BugsBoardPage() {
   const { scope, scopeLabel } = useProjectScope();
-  const { board, error, isLoading, move, mutate } = useBoard("bugs", scope);
+  // 【version-plan-console §7.4】与需求看板同构的「版本 → 计划」筛选行。
+  const [hierarchy, setHierarchy] = useState<HierarchyFilterValue>(EMPTY_HIERARCHY);
+  const hierarchyOptions = useHierarchyOptions();
+  const { board, error, isLoading, move, mutate } = useBoard("bugs", scope, hierarchy);
   const [openId, setOpenId] = useState<number | null>(null);
 
   // 【Phase-3 §2.3.3】通知直达：读 ?ticket=<id> 自动打开对应工单抽屉。
@@ -46,19 +53,32 @@ export default function BugsBoardPage() {
           </Link>
         }
       />
-      <main className="flex-1 overflow-hidden p-6">
-        {error && !board ? (
-          <ErrorState message="无法加载看板" onRetry={() => mutate()} />
-        ) : isLoading || !board ? (
-          <SkeletonBoard columns={5} />
-        ) : (
-          <KanbanBoard
-            board={board}
-            entity="bugs"
-            onMove={move}
-            onOpen={(card: Card) => setOpenId(card.id)}
-          />
-        )}
+      <main className="flex flex-1 flex-col overflow-hidden p-6">
+        <HierarchySelects
+          className="mb-4 shrink-0"
+          value={hierarchy}
+          onChange={setHierarchy}
+          versions={hierarchyOptions.versions}
+          plans={hierarchyOptions.plans}
+          loading={hierarchyOptions.isLoading}
+          versionsTruncated={hierarchyOptions.versionsTruncated}
+          plansTruncated={hierarchyOptions.plansTruncated}
+        />
+        {/* min-h-0 是 flex 子项能真正滚动的前提（否则内容会把容器撑破）。 */}
+        <div className="min-h-0 flex-1">
+          {error && !board ? (
+            <ErrorState message="无法加载看板" onRetry={() => mutate()} />
+          ) : isLoading || !board ? (
+            <SkeletonBoard columns={5} />
+          ) : (
+            <KanbanBoard
+              board={board}
+              entity="bugs"
+              onMove={move}
+              onOpen={(card: Card) => setOpenId(card.id)}
+            />
+          )}
+        </div>
       </main>
 
       <TicketDrawer

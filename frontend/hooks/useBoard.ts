@@ -1,8 +1,10 @@
 "use client";
 
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import { useCallback } from "react";
 import { api, swrFetcher, ApiError } from "@/lib/api";
+import { toHierarchyQuery, type HierarchyFilterValue } from "@/lib/hierarchy";
+import { invalidateHierarchyViews } from "@/lib/swr-keys";
 import { useToast } from "@/lib/toast";
 import type { ProjectScope } from "@/lib/project-scope";
 import type { Board, Card } from "@/lib/types";
@@ -16,12 +18,18 @@ export const BOARD_COLUMN_LIMIT = 100;
 // 看板数据拉取 + 乐观移动 + 回滚（§2.2 B / U3 / U4）。
 // 第二参为项目作用域（scale-and-project-scope §2.4⑦）：null=全部、"none"=未归属、number=该项目。
 // **必须**用 `== null` 判据而非真值判据——旧写法无法表达 "none"，且会把 id 0 当作「不过滤」。
-export function useBoard(entity: Entity, scope?: ProjectScope) {
+// 第三参为「版本 → 计划」级联筛选（version-plan-console §5.5）：类型从 lib/hierarchy
+// **import type**，绝不反向依赖 "use client" 组件的导出（层级倒置）。
+export function useBoard(entity: Entity, scope?: ProjectScope,
+                         hierarchy?: HierarchyFilterValue) {
   const toast = useToast();
+  const { mutate: globalMutate } = useSWRConfig();
   // 【lifecycle-and-governance §2.8】显式带上 column_limit：看板每列有上限（后端默认 100），
   // 写进 key 而非依赖后端默认值，是为了让「一个 key 一种形状」这条不变量在改上限时仍成立。
   const scopeParam = scope == null ? "" : `project_id=${scope}&`;
-  const key = `/board/${entity}?${scopeParam}column_limit=${BOARD_COLUMN_LIMIT}`;
+  const hierarchyParam = hierarchy ? toHierarchyQuery(hierarchy) : "";
+  const key = `/board/${entity}?${scopeParam}${hierarchyParam ? `${hierarchyParam}&` : ""}`
+    + `column_limit=${BOARD_COLUMN_LIMIT}`;
   const { data, error, isLoading, mutate } = useSWR<Board<Card>>(key, swrFetcher);
 
   // 把某卡移动到 toStatus 列的 toIndex 位置（乐观更新，失败回滚 + toast）。
@@ -113,6 +121,13 @@ export function useBoard(entity: Entity, scope?: ProjectScope) {
         return;
       }
 
+      // 【version-plan-console §3.2 落点④】写入**已经成功**这个事实一成立就失效层级视图。
+      // 挂在这里而不是第二段重取之后：第二段失败会走上面 catch 之外的另一条分支
+      // （`toast.error("已提交，正在刷新")`），那时后端已经改完了，却永远执行不到
+      // 重取之后的那一行——版本 / 计划进度就此永久陈旧，而用户看到的提示是「已提交，
+      // 正在刷新」，更不会去怀疑。判据应当是「写入成功」，而不是「重取也成功」。
+      void invalidateHierarchyViews(globalMutate);
+
       // —— 第二段：拉取权威数据（后端已算好 position）。失败**不回滚**——写入已成功 ——
       try {
         const fresh = await api.get<Board<Card>>(key);
@@ -122,7 +137,7 @@ export function useBoard(entity: Entity, scope?: ProjectScope) {
         mutate();
       }
     },
-    [data, entity, key, mutate, toast]
+    [data, entity, key, mutate, globalMutate, toast]
   );
 
   return { board: data, error, isLoading, move, mutate };

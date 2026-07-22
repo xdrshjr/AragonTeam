@@ -43,6 +43,14 @@ const NAV: NavItem[] = [
     icon: <Icon path="M20 6 9 17l-5-5" />,
   },
   {
+    // 【version-plan-console §5.4】层级树的入口，排在「需求」之前——它是需求 / BUG
+    // 的上层容器，阅读顺序应当自上而下。图标取「层叠 / 分支」意象。
+    href: "/versions",
+    label: "版本",
+    match: "/versions",
+    icon: <Icon path="M12 2 3 7l9 5 9-5zM3 12l9 5 9-5M3 17l9 5 9-5" />,
+  },
+  {
     href: "/requirements",
     label: "需求",
     match: "/requirements",

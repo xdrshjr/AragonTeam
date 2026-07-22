@@ -18,7 +18,7 @@
    级联清理仍只认 `lifecycle.delete_ticket_cascade`，行级门禁仍只认
    `auth_helpers.can_manage_ticket`。本模块只负责编排，不复制任何一条规则。
 4. **门禁与单条端点逐一对齐**：assign / unassign / delete 限 pm/admin（同
-   `PATCH /:id/assign`、`DELETE /:id`）；move / priority / severity 逐项走
+   `PATCH /:id/assign`、`DELETE /:id`）；move / priority / severity / plan 逐项走
    `can_manage_ticket`（同 `PATCH /:id/move`、`PATCH /:id`）。批量绝不能成为
    绕开 RBAC 的后门——那是本轮最需要防住的事。
 
@@ -42,13 +42,14 @@ from extensions import db
 from models.activity import Activity
 from models.agent import Agent
 from models.bug import Bug, SEVERITIES
+from models.plan import Plan
 from models.requirement import Requirement, PRIORITIES, ASSIGNEE_TYPES
 from models.user import User
-from services import lifecycle, notifications, workflow
+from services import hierarchy, lifecycle, notifications, workflow
 from services.auth_helpers import can_manage_ticket, forbidden
 from services.positions import next_position
 from services.scope import MAX_DB_INT
-from services.validation import ValidationError, want_str
+from services.validation import ValidationError, want_int, want_str
 
 # 单次批量的 id 上限。取值与 `pagination.MAX_LIMIT` 一致：用户一屏最多能看到
 # MAX_LIMIT 条，「全选可见项」就永远不会撞上这个上限；同时它也挡住了「一发请求写
@@ -71,6 +72,12 @@ _ROLE_GATES = {
     "unassign": ("admin", "pm"),
     "priority": None,
     "severity": None,
+    # 【version-plan-console §3.8】归属计划：**必须**是 None（不做粗粒度角色门禁），
+    # 因为 plan_id 的单条写路径是 `PATCH /api/{requirements,bugs}/<id>`，其门禁为行级
+    # `can_manage_ticket`。plan 与 priority/severity 同型（都是「把工单某字段设成某值」），
+    # 故同门禁——把它设成 ("admin","pm") 就会违反本模块 :20-23 那条「门禁与单条端点逐一
+    # 对齐」的不变量，并造出「一张一张改得动、一次改多张就 403」的认知断裂。
+    "plan": None,
     "delete": ("admin", "pm"),
 }
 
@@ -240,6 +247,28 @@ class _Runner:
                      message=f"{self.level_label}调整为 {value}")
         return "succeeded", ticket.id
 
+    def _do_plan(self, ticket):
+        """归属 / 解除归属到目标计划。跨项目是**逐项**失败（不同单可能属不同项目）。"""
+        plan = self.params["plan"]
+        target_id = plan.id if plan else None
+        if not can_manage_ticket(self.user, ticket):
+            return "failed", _fail(ticket.id, "forbidden",
+                                   {"reason": f"cannot edit this {self.entity}"})
+        if ticket.plan_id == target_id:
+            return "skipped", _skip(ticket.id, "already in target plan")
+        try:
+            # 复用单条写路径的唯一判据（同项目不变量 / 无项目工单采纳计划项目），
+            # 绝不在此内联第二份规则。ValidationError 在这里必须被**逐项**接住——
+            # 让它冒到全局处理器会把整批变成一个 400，其余合法工单全被连坐。
+            hierarchy.resolve_plan_for_ticket(ticket, {"plan_id": target_id})
+        except ValidationError as exc:
+            return "failed", _fail(ticket.id, exc.message,
+                                   {"field": exc.field, "expected": exc.expected})
+        Activity.log(self.entity, ticket.id, "updated", actor=self.actor,
+                     to_status=ticket.status,
+                     message=f"归属计划「{plan.name}」" if plan else "解除计划归属")
+        return "succeeded", ticket.id
+
     def _do_delete(self, ticket):
         ticket_id = ticket.id
         lifecycle.delete_ticket_cascade(self.entity, ticket)
@@ -253,6 +282,7 @@ class _Runner:
             "unassign": self._do_unassign,
             "priority": self._do_level,
             "severity": self._do_level,
+            "plan": self._do_plan,
             "delete": self._do_delete,
         }[self.action]
 
@@ -308,6 +338,27 @@ def _build_params(entity: str, action: str, data: dict):
                 "detail": {"expected": level_field},
             }), 400)
         return {"value": want_str(data, "value", required=True, choices=level_choices)}, None
+    if action == "plan":
+        # 请求级参数：整批共用一个目标计划。
+        # 【version-plan-console §3.8】`plan_id` 键**必须显式存在**：缺键 → 400，
+        # 而不是「当作解除归属」。理由有三：① 它复用的 hierarchy.resolve_plan_for_ticket
+        # 的契约是「无该键 → 不改」，把缺键解释成「清空」会让本模块与它所复用的唯一
+        # 判据打架；② 本模块既有先例是 assign / unassign **拆成两个 action**，破坏性
+        # 语义从不做缺省值；③ 一个漏传字段的客户端不该静默清空整批工单的归属。
+        # 显式 `"plan_id": null` 仍然是解除归属——那是用户明确表达过的意图。
+        if "plan_id" not in data:
+            return None, (jsonify({"error": "plan_id is required",
+                                   "detail": {"field": "plan_id",
+                                              "expected": "an existing plan id, "
+                                                          "or null to detach"}}), 400)
+        if data.get("plan_id") is None:
+            return {"plan": None}, None
+        plan = db.session.get(Plan, want_int(data, "plan_id"))
+        if plan is None:
+            return None, (jsonify({"error": "plan_id is invalid",
+                                   "detail": {"field": "plan_id",
+                                              "expected": "an existing plan"}}), 400)
+        return {"plan": plan}, None
     return {}, None                      # unassign / delete 无请求级参数
 
 

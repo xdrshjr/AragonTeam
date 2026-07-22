@@ -7,11 +7,13 @@ import type {
   DocumentKind,
   GovernanceAction,
   NotificationType,
+  PlanStatus,
   Priority,
   Severity,
   SettingsActivityAction,
   UserActivityAction,
   UserSource,
+  VersionStatus,
 } from "@/lib/types";
 
 // 徽章配色（浅底 + 深字），符合 Anthropic 暖色浅色风。
@@ -72,6 +74,34 @@ export const SEVERITY_STYLES: Record<Severity, BadgeStyle> = {
   major: { label: "主要", bg: "#F6E7C8", fg: "#9A7420" },
   critical: { label: "严重", bg: "#F3D2C7", fg: "#B23B1E" },
 };
+
+// —— version-plan-console：版本 / 计划状态徽章 ——
+// 色值全部取自既有明度基线（中性 / 蓝 / 绿），对比度 ≥ 4.5:1。
+// `archived` 与 `planning` 同为中性，靠**更冷更深一档的底色 + 不同文案**区分——
+// 归档是「收起来了」，不是「还没开始」，二者不可长得一样。
+// 必须是穷尽的 Record<Union, BadgeStyle>（同 NOTIFICATION_LABELS 的理由）：
+// 漏一个键就是编译错误，而不是界面上冒出一串英文原文。
+
+export const VERSION_STATUS_STYLES: Record<VersionStatus, BadgeStyle> = {
+  planning: { label: "规划中", bg: "#EDEAE3", fg: "#6E6A62" },
+  active: { label: "进行中", bg: "#DCE7F2", fg: "#3B6EA5" },
+  released: { label: "已发布", bg: "#D9EBDD", fg: "#3E7A4F" },
+  archived: { label: "已归档", bg: "#E4E1DA", fg: "#5F5B54" },
+};
+
+export const PLAN_STATUS_STYLES: Record<PlanStatus, BadgeStyle> = {
+  planning: { label: "规划中", bg: "#EDEAE3", fg: "#6E6A62" },
+  active: { label: "进行中", bg: "#DCE7F2", fg: "#3B6EA5" },
+  completed: { label: "已完成", bg: "#D9EBDD", fg: "#3E7A4F" },
+  archived: { label: "已归档", bg: "#E4E1DA", fg: "#5F5B54" },
+};
+
+/** 下拉选项从配色表派生（同 DOCUMENT_KIND_OPTIONS），确保文案永不分叉。 */
+export const VERSION_STATUS_OPTIONS = (Object.keys(VERSION_STATUS_STYLES) as VersionStatus[])
+  .map((k) => ({ value: k, label: VERSION_STATUS_STYLES[k].label }));
+
+export const PLAN_STATUS_OPTIONS = (Object.keys(PLAN_STATUS_STYLES) as PlanStatus[])
+  .map((k) => ({ value: k, label: PLAN_STATUS_STYLES[k].label }));
 
 export const ROLE_LABELS: Record<string, string> = {
   admin: "管理员",

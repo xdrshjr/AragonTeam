@@ -24,7 +24,11 @@ const TICKET_VIEW_PREFIXES = [
  *  【login-hardening-and-audit-console §3.4】追加 `/settings/audit`：解锁账号 / 改注册配置
  *  后审计页要跟着刷。就地扩这个数组字面量（本常量模块私有，对外只暴露
  *  `invalidateAdminViews`）。 */
-const ADMIN_VIEW_PREFIXES = ["/users", "/projects", "/agents", "/stats", "/settings/audit"];
+const ADMIN_VIEW_PREFIXES = [
+  "/users", "/projects", "/agents", "/stats", "/settings/audit",
+  // 【version-plan-console §3.2】版本 / 计划的增删改要让所有挂着它们的下拉与列表一起刷新。
+  "/versions", "/plans",
+];
 
 function invalidateByPrefix(mutate: ScopedMutator, prefixes: string[]) {
   return mutate(
@@ -51,4 +55,24 @@ export function invalidateAdminViews(mutate: ScopedMutator) {
  */
 export function invalidateDocumentViews(mutate: ScopedMutator) {
   return invalidateByPrefix(mutate, ["/documents"]);
+}
+
+/** 工单的归属 / 状态变化后，失效版本与计划的进度视图（version-plan-console §3.2）。
+ *
+ * **为什么不是往 `TICKET_VIEW_PREFIXES` 里塞两个前缀**：那个数组只被
+ * `invalidateTicketViews` 读，而它的现网调用点只有 `TicketDrawer.onDelete`、
+ * `agents/page.tsx` 与四个文档 hook——**看板拖拽、批量操作、建单三条路径根本不调它**，
+ * 加了前缀也刷不到，「推完最后一张单版本进度不动」会在最主流的拖拽路径上发生。
+ *
+ * **为什么单独成函数而不是复用 `invalidateTicketViews`**：`useBoard.move` 成功后已经
+ * 自己重取过 `/board/` 那一个 key，再走一遍含 `/board/` 的宽前缀表就是一次白白的重复
+ * 请求。本函数只管两个前缀，形状与理由同上面的 `invalidateDocumentViews`（窄函数 +
+ * 调用方按需叠加，而不是把前缀表越堆越宽）。
+ *
+ * **注意方向**：`ADMIN_VIEW_PREFIXES` 解决「版本/计划变了 → 列表与下拉该刷」，
+ * 本函数解决「工单变了 → 进度该刷」。这是两个不同方向，少做任何一侧都必然留下
+ * 一类陈旧视图。
+ */
+export function invalidateHierarchyViews(mutate: ScopedMutator) {
+  return invalidateByPrefix(mutate, ["/versions", "/plans"]);
 }

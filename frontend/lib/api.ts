@@ -27,6 +27,16 @@ export const USERS_KEY = "/users?limit=200";
 /** `/agents` 的唯一 SWR key（同上）。 */
 export const AGENTS_KEY = "/agents?limit=200";
 
+/** `/versions` 的**路径前缀**（version-plan-console §3.2）。**有意不叫 `*_KEY`**：
+ *  同 `GOVERNANCE_AUDIT_PREFIX` 的理由——版本列表带项目作用域 + 分页 + 状态筛选，
+ *  是「一个前缀多种 key」。而且版本 / 计划的下拉**必须**带 `?project_id=<scope>`，
+ *  否则在项目 A 里会看到项目 B 的版本；一个不含 scope 的固定字面量常量做不到这件事。
+ *  完整 key 由 hooks 内联拼。 */
+export const VERSIONS_PREFIX = "/versions";
+
+/** `/plans` 的路径前缀（同上）。 */
+export const PLANS_PREFIX = "/plans";
+
 /** 文档库首页的 SWR key 前缀（ticket-document-management）。带 `?` 的完整 key 由
  *  `useDocumentLibrary` 依筛选条件拼出；这里只固化前缀，供 `invalidateDocumentViews`
  *  与各页共用同一个字面量。 */

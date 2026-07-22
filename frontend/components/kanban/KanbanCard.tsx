@@ -5,6 +5,7 @@ import { CSS } from "@dnd-kit/utilities";
 import type { Card, Requirement, Bug } from "@/lib/types";
 import { AssigneeAvatar } from "@/components/ui/Avatar";
 import Badge from "@/components/ui/Badge";
+import PlanBadge from "@/components/planning/PlanBadge";
 import { PRIORITY_STYLES, SEVERITY_STYLES } from "@/lib/constants";
 
 interface Props {
@@ -95,6 +96,9 @@ export default function KanbanCard({
               {card.document_count}
             </span>
           )}
+          {/* 【version-plan-console §7.4】小号计划徽章，与回形针徽章并排。卡片上不做
+              版本回跳（那是第二种点击语义，会与拖拽 / 打开抽屉打架）。 */}
+          {card.plan && <PlanBadge plan={card.plan} />}
         </div>
         {isBug(card) && card.related_requirement_id && (
           <span className="text-xs text-ink-muted">
